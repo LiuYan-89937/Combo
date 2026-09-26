@@ -5,6 +5,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${PROJECT_ROOT}"
 TAURI_DIR="${PROJECT_ROOT}/src-tauri"
 CONFIG_PATH="${TAURI_DIR}/tauri.conf.json"
 PYTHON_RUNTIME="${TAURI_DIR}/resources/python/bin/python3"

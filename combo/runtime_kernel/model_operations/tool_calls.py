@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 
-def bind_tools(model: Any, tools: list[BaseTool]) -> Any:
+def bind_tools(model: Any, tools: list[BaseTool] | list[dict[str, Any]]) -> Any:
     if not tools:
         return model
     return model.bind_tools(tools, tool_choice="auto")
@@ -55,7 +55,8 @@ def _response_candidates(response: Any) -> list[dict[str, Any]]:
 
 
 def _normalize_candidate(candidate: dict[str, Any], *, index: int) -> dict[str, Any] | None:
-    function = candidate.get("function") if isinstance(candidate.get("function"), dict) else {}
+    raw_function = candidate.get("function")
+    function = raw_function if isinstance(raw_function, dict) else {}
     name = str(candidate.get("name") or function.get("name") or "").strip()
     if not name:
         return None

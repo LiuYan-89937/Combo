@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from collections.abc import Callable
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from combo.dynamic_runtime.capability_adapters import CapabilityAdapterRegistry
 from combo.dynamic_runtime.capability_kind_adapters import default_capability_adapters
@@ -36,8 +36,10 @@ from combo.dynamic_runtime.cancellation import (
     RuntimeCancellationStore,
 )
 from combo.dynamic_runtime.command_control import CancelCommandRequestHandler
-from combo.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
+from combo.dynamic_runtime.knowledge_store import GlobalKnowledgeStore
+from combo.dynamic_runtime.scheduler_store import WorkspaceSchedulerStore
 from combo.dynamic_runtime.context_snapshot_store import ConversationContextSnapshotStore
+from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from combo.dynamic_runtime.knowledge_search import HybridKnowledgeSearchIndex
 from combo.dynamic_runtime.dispatcher import (
     CommandDispatcher,
@@ -70,16 +72,16 @@ from combo.dynamic_runtime.repositories import (
 from combo.dynamic_runtime.recovery import RuntimeRecoveryReport, RuntimeRecoveryService
 from combo.dynamic_runtime.runtime_service import (
     DynamicRuntimeService,
-    RuntimeLaunchContextResolver,
     RuntimeObservationSink,
 )
+from combo.dynamic_runtime.launch_context import RuntimeLaunchContextResolver
 from combo.dynamic_runtime.run_control import RuntimeRunControlRegistry
 from combo.dynamic_runtime.runtime_start import RuntimeStartStore
 from combo.dynamic_runtime.resume import ResumeInterruptCommandHandler
-from combo.dynamic_runtime.steering import SteerRuntimeCommandHandler
+from combo.dynamic_runtime.steering import SteerRuntimeCommandHandler, SteeringAttachmentResolver
 from combo.dynamic_runtime.services import DynamicRuntimeServiceSet, DynamicRuntimeServicesFactory
 from combo.model_pool.store import ModelPoolStore
-from combo.models.embedding_model import resolve_embedding_model_profile
+from combo.model_pool.embedding import resolve_embedding_model_profile
 from combo.model_pool.usage import ModelUsageStore
 
 
@@ -125,6 +127,10 @@ class DynamicRuntimeStores:
     scheduler: WorkspaceSchedulerStore
 
 
+class RuntimeLaunchServices(RuntimeLaunchContextResolver, SteeringAttachmentResolver, Protocol):
+    """The application-level resolver used by both launches and queued input."""
+
+
 class DynamicRuntimeApplication:
     """The single composition root for authoritative dynamic runtime services."""
 
@@ -140,7 +146,7 @@ class DynamicRuntimeApplication:
         runtime_service: DynamicRuntimeService,
         recovery_report: RuntimeRecoveryReport,
         capability_search: HybridCapabilitySearchIndex,
-        launch_context_resolver: RuntimeLaunchContextResolver,
+        launch_context_resolver: RuntimeLaunchServices,
     ) -> None:
         self.config = config
         self.database = database
@@ -162,7 +168,7 @@ class DynamicRuntimeApplication:
         config: DynamicRuntimeApplicationConfig,
         services_factory: DynamicRuntimeServicesFactory | Callable[[DynamicRuntimeStores, HybridCapabilitySearchIndex], DynamicRuntimeServicesFactory],
         model_pool_store: ModelPoolStore,
-        launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
+        launch_context_resolver: RuntimeLaunchServices | Callable[[DynamicRuntimeStores], RuntimeLaunchServices],
         capability_bootstrap: Callable[[DynamicRuntimeStores, CapabilityAdapterRegistry], None],
         main_agent_capability_ids: Callable[[], tuple[str, ...]],
         main_agent_mcp_server_ids: Callable[[], tuple[str, ...]],
@@ -277,7 +283,7 @@ class DynamicRuntimeApplication:
     def main_command_dispatcher(
         self,
         *,
-        delegated_model_selector: object | None = None,
+        delegated_model_selector: DelegatedTaskModelSelector | None = None,
     ) -> CommandDispatcher:
         handlers: dict[str, CommandHandler] = {
             "cancel_command_request": CancelCommandRequestHandler(

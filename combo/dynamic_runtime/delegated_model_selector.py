@@ -14,7 +14,7 @@ from combo.model_pool import (
     ModelPoolStore,
 )
 from combo.model_pool.resolver import resolve_available_chat_model
-from combo.models.embedding_model import resolve_embedding_model_profile
+from combo.model_pool.embedding import resolve_embedding_model_profile
 from combo.runtime_kernel.model_operations import (
     execute_structured_output_invocation,
     prepare_structured_output_invocation,

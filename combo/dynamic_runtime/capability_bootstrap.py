@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -311,7 +312,7 @@ def _digest(value: object) -> str:
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _diagnostic_text(item: dict[str, object]) -> str:
+def _diagnostic_text(item: Mapping[str, object]) -> str:
     message = str(item.get("message") or item)
     raw_path = item.get("path")
     if not isinstance(raw_path, (list, tuple)) or not raw_path:

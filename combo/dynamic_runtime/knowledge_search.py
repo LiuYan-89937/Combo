@@ -4,6 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import logging
 from math import sqrt
 from threading import Lock
 from typing import Any, Callable
@@ -13,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from combo.dynamic_runtime.capability_search import CapabilityEmbeddingRuntime
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
-from combo.dynamic_runtime.hybrid_retrieval import (
+from combo.context_system.hybrid_retrieval import (
     FusedRetrievalCandidate,
     RankedRetrievalCandidate,
     fuse_hybrid_rankings,
@@ -53,6 +54,7 @@ class KnowledgeChunkProjection:
 
 
 EmbeddingRuntimeResolver = Callable[[], CapabilityEmbeddingRuntime | None]
+logger = logging.getLogger(__name__)
 
 
 class HybridKnowledgeSearchIndex:
@@ -127,8 +129,9 @@ class HybridKnowledgeSearchIndex:
                 self._pending_refresh = True
                 self._pending_force = self._pending_force or force
                 return
-            self._future = self._executor.submit(self._rebuild_if_needed, force)
-            self._future.add_done_callback(self._after_rebuild)
+            future = self._executor.submit(self._rebuild_if_needed, force)
+            self._future = future
+        future.add_done_callback(self._after_rebuild)
 
     def search(
         self,
@@ -167,7 +170,11 @@ class HybridKnowledgeSearchIndex:
         ranked = fuse_hybrid_rankings({"lexical": lexical, "semantic": vector})[:result_limit]
         return self._results(generation_id, ranked)
 
-    def _after_rebuild(self, _future: Future[None]) -> None:
+    def _after_rebuild(self, future: Future[None]) -> None:
+        try:
+            future.result()
+        except Exception:
+            logger.exception("knowledge index update failed")
         with self._lock:
             pending_refresh = self._pending_refresh
             pending_force = self._pending_force
@@ -197,8 +204,8 @@ class HybridKnowledgeSearchIndex:
         if runtime is not None:
             vector_positions = [index for index, item in enumerate(chunks) if item.vector_enabled]
             if vector_positions:
+                reusable = {} if force else self._reusable_embeddings(runtime.fingerprint)
                 try:
-                    reusable = {} if force else self._reusable_embeddings(runtime.fingerprint)
                     pending_positions: list[int] = []
                     for position in vector_positions:
                         existing = reusable.get(chunks[position].chunk_id)
@@ -218,6 +225,7 @@ class HybridKnowledgeSearchIndex:
                     search_mode = "hybrid"
                 except Exception as exc:
                     diagnostic = f"{type(exc).__name__}: {exc}"
+                    logger.exception("knowledge document embedding failed; keeping lexical index")
                     fingerprint = None
         self._activate_generation(
             chunks=chunks,
@@ -251,6 +259,7 @@ class HybridKnowledgeSearchIndex:
         try:
             return self._embedding_runtime()
         except Exception:
+            logger.exception("knowledge embedding runtime resolution failed; using lexical retrieval")
             return None
 
     def _project_chunks(self) -> tuple[KnowledgeChunkProjection, ...]:
@@ -456,7 +465,11 @@ class HybridKnowledgeSearchIndex:
         runtime = self._resolve_embedding_runtime()
         if runtime is None or runtime.fingerprint != embedding_fingerprint:
             return ()
-        query_vector = _validated_vector(runtime.embed_query(query), runtime.dimensions)
+        try:
+            query_vector = _validated_vector(runtime.embed_query(query), runtime.dimensions)
+        except Exception:
+            logger.exception("knowledge query embedding failed; using lexical ranking")
+            return ()
         source_clause = "and source_id = ?" if source_id else ""
         parameters: tuple[Any, ...] = (generation_id, source_id) if source_id else (generation_id,)
         with self._database.connection(query_only=True) as connection:
@@ -515,7 +528,8 @@ class HybridKnowledgeSearchIndex:
 
 
 def _document_chunks(content: str, source: dict[str, Any]) -> list[str]:
-    chunking = source.get("chunking") if isinstance(source.get("chunking"), dict) else {}
+    raw_chunking = source.get("chunking")
+    chunking = raw_chunking if isinstance(raw_chunking, dict) else {}
     chunk_size = max(100, min(int(chunking.get("chunk_size") or DEFAULT_KNOWLEDGE_CHUNK_SIZE), 8000))
     overlap = max(0, min(int(chunking.get("chunk_overlap") or DEFAULT_KNOWLEDGE_CHUNK_OVERLAP), chunk_size - 1))
     from langchain_text_splitters import RecursiveCharacterTextSplitter

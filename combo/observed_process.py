@@ -123,16 +123,18 @@ def run_observed_process(
         _drain_output(output_queue, captured)
         if cancel_event is not None and cancel_event.is_set():
             raise ObservedProcessCancelled("subprocess execution was cancelled") from None
+        if isinstance(exc, ObservedProcessCancelled):
+            raise
         if isinstance(exc, ObservedProcessInactivityTimeout):
             raise ObservedProcessInactivityTimeout(
                 list(command),
-                inactivity_timeout_seconds,
+                exc.timeout,
                 output="".join(captured["stdout"]),
                 stderr="".join(captured["stderr"]),
             ) from None
         raise subprocess.TimeoutExpired(
             list(command),
-            timeout_seconds,
+            exc.timeout,
             output="".join(captured["stdout"]),
             stderr="".join(captured["stderr"]),
         ) from None

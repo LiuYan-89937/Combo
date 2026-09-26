@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.mcp_content_runtime import MCPContentRuntime
+from combo.tooling.builtins.runtime_ports import MCPContentRuntimePort
 from combo.tooling.builtins.mcp_content.specs import MCP_CONTENT_RUNTIME_RESOURCE
 from combo.tooling.envelope import tool_envelope
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(MCP_CONTENT_RUNTIME_RESOURCE)
-    if not isinstance(runtime, MCPContentRuntime):
+    if not isinstance(runtime, MCPContentRuntimePort):
         raise RuntimeError("MCP content runtime is not configured")
     action = str(arguments.get("action") or "").strip()
     if action == "read_resource":

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from langgraph.config import get_stream_writer
 
-from combo.runtime_kernel.observability.schema import RuntimeObservationEvent
+from combo.runtime_protocol.observation_event import RuntimeObservationEvent
 
 ContextEventSink = Callable[[dict[str, Any]], None]
+logger = logging.getLogger(__name__)
 
 
 def context_event_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -42,9 +44,9 @@ def emit_context_event(
 def _emit_stream_event(payload: dict[str, Any]) -> None:
     try:
         writer = get_stream_writer()
-    except Exception:
+    except RuntimeError:
         return
     try:
         writer({"type": "context_event", "payload": payload})
     except Exception:
-        return
+        logger.exception("context event stream writer failed")

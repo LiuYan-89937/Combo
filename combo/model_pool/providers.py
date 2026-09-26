@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from combo.models import list_supported_chat_model_profiles
+from combo.models.chat_model import list_supported_chat_model_profiles
 
 
 ModelPoolProviderKind = Literal["chat", "embedding", "image_generation"]

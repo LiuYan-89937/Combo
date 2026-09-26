@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping, Sequence
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from jsonschema import Draft202012Validator
@@ -69,35 +69,153 @@ class ResourceStore:
         return items
 
     def put(self, descriptor: ResourceDescriptor, value: Any) -> dict[str, Any]:
-        self._assert_writable()
-        errors = sorted(Draft202012Validator(descriptor.value_schema).iter_errors(value), key=lambda item: list(item.path))
-        if errors:
-            raise ResourceStoreError("resource value validation failed: " + "; ".join(error.message for error in errors))
-        identity = descriptor.identity
-        nonce = os.urandom(12)
-        plaintext = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        encrypted = self._cipher().encrypt(nonce, plaintext, _aad(identity))
-        now = _now()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                insert into capability_resources(resource_key, identity_json, nonce_b64, ciphertext_b64, updated_at)
-                values (?, ?, ?, ?, ?)
-                on conflict(resource_key) do update set
-                  identity_json=excluded.identity_json,
-                  nonce_b64=excluded.nonce_b64,
-                  ciphertext_b64=excluded.ciphertext_b64,
-                  updated_at=excluded.updated_at
-                """,
-                (identity.storage_key, identity.model_dump_json(), _b64(nonce), _b64(encrypted), now),
-            )
-        return {"identity": identity.model_dump(mode="json"), "configured": True, "updated_at": now}
+        now, _ = self.apply_changes(puts=((descriptor, value),))
+        return {"identity": descriptor.identity.model_dump(mode="json"), "configured": True, "updated_at": now}
 
     def delete(self, identity: ResourceIdentity) -> bool:
+        _, deleted = self.apply_changes(deletes=(identity,))
+        return deleted > 0
+
+    def apply_changes(
+        self,
+        *,
+        puts: Sequence[tuple[ResourceDescriptor, Any]] = (),
+        deletes: Sequence[ResourceIdentity] = (),
+    ) -> tuple[str, int]:
+        """Commit a revision's encrypted values and retired identities together."""
+        self._assert_writable()
+        now = _now()
+        prepared = self._prepare_puts(puts, now=now)
+        deleted = 0
+        with self._connect() as conn:
+            self._write_prepared(conn, prepared)
+            for identity in deletes:
+                cursor = conn.execute("delete from capability_resources where resource_key = ?", (identity.storage_key,))
+                deleted += cursor.rowcount
+        return now, deleted
+
+    def prepare_publication(self, operation_id: str, values: Mapping[str, Any]) -> None:
+        """Durably stage secret values before a ToolPackage source is exchanged."""
+        self._assert_writable()
+        nonce = os.urandom(12)
+        plaintext = json.dumps(dict(values), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ciphertext = self._cipher().encrypt(nonce, plaintext, operation_id.encode("utf-8"))
+        with self._connect() as conn:
+            conn.execute(
+                "insert into resource_publications(operation_id, nonce_b64, ciphertext_b64, state) values (?, ?, ?, 'prepared')",
+                (operation_id, _b64(nonce), _b64(ciphertext)),
+            )
+
+    def publication_state(self, operation_id: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select state from resource_publications where operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+        return None if row is None else str(row["state"])
+
+    def commit_publication(
+        self,
+        operation_id: str,
+        *,
+        descriptors: Mapping[str, ResourceDescriptor],
+        deletes: Sequence[ResourceIdentity],
+    ) -> None:
+        """Publish staged secrets and retire old identities in one SQLite transaction."""
         self._assert_writable()
         with self._connect() as conn:
-            cursor = conn.execute("delete from capability_resources where resource_key = ?", (identity.storage_key,))
-        return cursor.rowcount > 0
+            row = conn.execute(
+                "select nonce_b64, ciphertext_b64, state from resource_publications where operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                raise ResourceStoreError("resource publication is missing")
+            if row["state"] == "committed":
+                return
+            if row["state"] != "prepared":
+                raise ResourceStoreError("resource publication state is invalid")
+            plaintext = self._cipher().decrypt(
+                _unb64(str(row["nonce_b64"])),
+                _unb64(str(row["ciphertext_b64"])),
+                operation_id.encode("utf-8"),
+            )
+            values = json.loads(plaintext.decode("utf-8"))
+            if not isinstance(values, dict) or values.keys() - descriptors.keys():
+                raise ResourceStoreError("resource publication does not match the published schema")
+            now = _now()
+            prepared = self._prepare_puts(
+                [(descriptors[name], value) for name, value in values.items()], now=now,
+            )
+            published_keys = {item[0] for item in prepared}
+            self._write_prepared(conn, prepared)
+            conn.executemany(
+                "delete from capability_resources where resource_key = ?",
+                [(identity.storage_key,) for identity in deletes if identity.storage_key not in published_keys],
+            )
+            conn.execute(
+                "update resource_publications set state = 'committed' where operation_id = ?",
+                (operation_id,),
+            )
+
+    def discard_publication(self, operation_id: str) -> None:
+        self._assert_writable()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select state from resource_publications where operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is not None and row["state"] != "committed":
+                conn.execute(
+                    "delete from resource_publications where operation_id = ?",
+                    (operation_id,),
+                )
+
+    def release_publication(self, operation_id: str) -> None:
+        self._assert_writable()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select state from resource_publications where operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None or row["state"] != "committed":
+                raise ResourceStoreError("cannot release an uncommitted resource publication")
+            conn.execute("delete from resource_publications where operation_id = ?", (operation_id,))
+
+    def _prepare_puts(
+        self,
+        puts: Sequence[tuple[ResourceDescriptor, Any]],
+        *,
+        now: str,
+    ) -> list[tuple[str, str, str, str, str]]:
+        prepared: list[tuple[str, str, str, str, str]] = []
+        for descriptor, value in puts:
+            errors = sorted(Draft202012Validator(descriptor.value_schema).iter_errors(value), key=lambda item: list(item.path))
+            if errors:
+                raise ResourceStoreError("resource value validation failed: " + "; ".join(error.message for error in errors))
+            identity = descriptor.identity
+            nonce = os.urandom(12)
+            plaintext = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            encrypted = self._cipher().encrypt(nonce, plaintext, _aad(identity))
+            prepared.append((identity.storage_key, identity.model_dump_json(), _b64(nonce), _b64(encrypted), now))
+        return prepared
+
+    @staticmethod
+    def _write_prepared(
+        conn: sqlite3.Connection,
+        prepared: Sequence[tuple[str, str, str, str, str]],
+    ) -> None:
+        conn.executemany(
+            """
+            insert into capability_resources(resource_key, identity_json, nonce_b64, ciphertext_b64, updated_at)
+            values (?, ?, ?, ?, ?)
+            on conflict(resource_key) do update set
+              identity_json=excluded.identity_json,
+              nonce_b64=excluded.nonce_b64,
+              ciphertext_b64=excluded.ciphertext_b64,
+              updated_at=excluded.updated_at
+            """,
+            prepared,
+        )
 
     def resolve(self, descriptor: ResourceDescriptor) -> Any:
         identity = descriptor.identity
@@ -187,6 +305,9 @@ class ResourceStore:
             yield conn
             if not self.read_only:
                 conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -200,6 +321,16 @@ class ResourceStore:
                   nonce_b64 text not null,
                   ciphertext_b64 text not null,
                   updated_at text not null
+                )
+                """
+            )
+            conn.execute(
+                """
+                create table if not exists resource_publications (
+                  operation_id text primary key,
+                  nonce_b64 text not null,
+                  ciphertext_b64 text not null,
+                  state text not null check(state in ('prepared', 'committed'))
                 )
                 """
             )

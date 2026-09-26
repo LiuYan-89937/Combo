@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from langchain_core.messages import HumanMessage
-from combo.models import resolve_embedding_model_profile, reset_embedding_model
+from combo.model_pool.embedding import resolve_embedding_model_profile, reset_embedding_model
 
 from combo.model_pool import (
     ModelPoolCredential,
@@ -328,11 +328,8 @@ def _skipped_custom_headers(
     no session context.
     """
 
-    try:
-        profile = store.require_profile(profile_id)
-        credential = store.require_credential(profile.credential_id)
-    except Exception:
-        return []
+    profile = store.require_profile(profile_id)
+    credential = store.require_credential(profile.credential_id)
     return sorted(
         header.name
         for header in credential.headers

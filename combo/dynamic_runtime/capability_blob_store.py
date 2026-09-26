@@ -3,7 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 from pathlib import Path
 
-from combo.dynamic_runtime.capability_definitions import SkillContentRef, ToolPackageFileRef
+from combo.dynamic_runtime.capability_definitions import SkillContentKind, SkillContentRef, ToolPackageFileRef
 from combo.file_atomic import atomic_write_bytes
 from combo.dynamic_runtime.content_media import is_text_media_type
 
@@ -18,7 +18,7 @@ class CapabilityBlobStore:
         self,
         *,
         logical_path: str,
-        kind: str,
+        kind: SkillContentKind,
         media_type: str,
         content: bytes,
     ) -> SkillContentRef:

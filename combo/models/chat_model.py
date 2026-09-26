@@ -67,14 +67,6 @@ class ChatModelSettings:
         }
 
 
-def get_main_model() -> BaseChatModel | None:
-    return _available_model("main")
-
-
-def get_task_model() -> BaseChatModel | None:
-    return _available_model("task")
-
-
 def create_chat_model_from_settings(settings: ChatModelSettings) -> BaseChatModel | None:
     return _create_model(settings)
 
@@ -87,10 +79,3 @@ def _create_model(settings: ChatModelSettings) -> BaseChatModel | None:
     if not settings.available:
         return None
     return adapter_for_profile(settings.profile).create_chat_model(settings)
-
-
-def _available_model(role: str) -> BaseChatModel | None:
-    from combo.model_pool.resolver import resolve_available_chat_model
-
-    resolved = resolve_available_chat_model(role)
-    return resolved.model if resolved is not None else None

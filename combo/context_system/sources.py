@@ -6,13 +6,14 @@ from hashlib import sha256
 from typing import Any, Protocol
 
 from combo.context_system.schema import ContextCandidate, ContextQuery
+from combo.context_system.memory_results import MemorySearchResult
 from combo.context_system.token_estimation import estimate_text_tokens
 from combo.runtime_protocol import RuntimeExecutionIdentity
 
 
 class ScopedMemorySearchStore(Protocol):
     def search(self, *, principal_id: str, workspace_id: str, query: str, limit: int,
-               min_relevance: float = 0.0) -> tuple[Any, ...]: ...
+               min_relevance: float = 0.0) -> tuple[MemorySearchResult, ...]: ...
     def search_version(self, *, principal_id: str, workspace_id: str) -> str: ...
     def active_references(self, *, principal_id: str, workspace_id: str) -> dict[str, tuple[int, str]]: ...
 
@@ -62,15 +63,22 @@ class ScopedMemoryContextSource:
     def validate(self, candidates: list[ContextCandidate], *, runtime_context: ContextSourceRuntime) -> list[ContextCandidate]:
         identity = runtime_context.memory_identity()
         refs = self._store.active_references(principal_id=identity.principal_id, workspace_id=identity.workspace_id)
-        return [item for item in candidates
-                if item.source_id == self.source_id
+        validated: list[ContextCandidate] = []
+        for item in candidates:
+            memory_id = item.metadata.get("memory_id")
+            if (
+                item.source_id == self.source_id
                 and item.metadata.get("principal_id") == identity.principal_id
-                and refs.get(item.metadata.get("memory_id")) == (
+                and isinstance(memory_id, str)
+                and refs.get(memory_id) == (
                     item.metadata.get("revision"), sha256(item.content.encode()).hexdigest(),
-                )]
+                )
+            ):
+                validated.append(item)
+        return validated
 
 
-def memory_candidate(result: Any, *, origin: str = "automatic") -> ContextCandidate:
+def memory_candidate(result: MemorySearchResult, *, origin: str = "automatic") -> ContextCandidate:
     revision = result.revision
     return ContextCandidate(
         candidate_id=f"memory:{revision.memory_id}:{revision.revision}",

@@ -14,7 +14,7 @@ from typing import Any
 
 from combo.tooling.skillhub.search_query import normalize_skillhub_search_query
 from combo.tooling.skillhub.distribution import install_skillhub_cli
-from combo.dynamic_runtime.capability_definitions import SKILL_NAME_PATTERN
+from combo.skill_manifest import SKILL_NAME_PATTERN
 from combo.tooling.installers.service import SkillPackageInstaller
 
 
@@ -97,11 +97,7 @@ class SkillHubService:
     def install(self, skill: str, *, timeout_seconds: int = 240) -> dict[str, Any]:
         requested = _required_skillhub_reference(skill)
         cli_path = self._require_cli()
-        self.skills_dir.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, tempfile.TemporaryDirectory(
-            prefix=".skillhub-install-",
-            dir=self.skills_dir.parent,
-        ) as temporary_directory:
+        with self._lock, tempfile.TemporaryDirectory(prefix="combo-skillhub-install-") as temporary_directory:
             staging = Path(temporary_directory)
             result = _run_skillhub_command(
                 cli_path,
@@ -136,19 +132,7 @@ class SkillHubService:
         if target.parent != self.skills_dir:
             raise ValueError("SkillHub skill path escapes the managed Skill directory")
         with self._lock:
-            if not target.is_dir():
-                raise LookupError(f"installed Skill not found: {skill_name}")
-            backup = self.skills_dir.parent / f".{skill_name}.skillhub-remove"
-            if backup.exists():
-                raise RuntimeError(f"stale SkillHub removal backup exists: {backup}")
-            os.replace(target, backup)
-            try:
-                self._publish_changes()
-            except BaseException:
-                os.replace(backup, target)
-                self._publish_changes()
-                raise
-            shutil.rmtree(backup)
+            self._package_installer.remove(skill_name)
         return {
             **self.status(),
             "action": "remove",
@@ -174,10 +158,6 @@ class SkillHubService:
         if cli_path is None:
             raise RuntimeError("SkillHub CLI is not installed")
         return cli_path
-
-    def _publish_changes(self) -> None:
-        self._package_installer.publish_changes()
-
 
 def ensure_global_skillhub_cli() -> dict[str, Any]:
     """Report the external CLI state without creating a second Skill registry."""

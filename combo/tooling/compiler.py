@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from combo.tooling.execution_context import current_tool_call
 from combo.tooling.approval_policy import ToolApprovalPolicyConfig
 from combo.tooling.gateway import (
+    ToolEntrypoint,
     ToolApprovalHandler,
     ToolApprovalTrustResolver,
     ToolExecutionGateway,
@@ -60,7 +61,7 @@ class ToolCompiler:
         self,
         spec: ToolSpec,
         *,
-        entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+        entrypoint: ToolEntrypoint,
         hard_risk_evaluator: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
     ) -> BaseTool:
         """Compile an already materialized entrypoint without consulting a registry or filesystem."""
@@ -132,7 +133,7 @@ class ToolCompiler:
         self,
         spec: ToolSpec,
         *,
-        entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+        entrypoint: ToolEntrypoint,
     ) -> BaseTool:
         """Compile a dispatcher whose selected target owns execution policy."""
         if not callable(entrypoint):
@@ -147,7 +148,7 @@ class ToolCompiler:
                 _normalize_tool_arguments(dict(kwargs)),
                 schema=spec.input_schema,
             )
-            result = entrypoint(arguments, dict(self.resources))
+            result = entrypoint(arguments=arguments, resources=dict(self.resources))
             if not isinstance(result, dict) or result.get("type") != "tool_observation":
                 raise ToolCompileError(
                     f"delegated tool {spec.id} must return a target tool observation"

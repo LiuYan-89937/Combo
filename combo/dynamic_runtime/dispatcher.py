@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Awaitable, Literal, Mapping, Protocol
+import logging
+from typing import Literal, Mapping, Protocol
 
 from combo.dynamic_runtime.repositories import CommandInbox, utc_now_text
 from combo.runtime_protocol import (
@@ -11,6 +12,9 @@ from combo.runtime_protocol import (
     OutboxRecord,
     RuntimeErrorEnvelope,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 CommandTerminalStatus = Literal["completed", "failed", "cancelled", "rejected"]
@@ -39,11 +43,11 @@ class CommandOutcome:
 
 
 class CommandHandler(Protocol):
-    def handle(
+    async def handle(
         self,
         envelope: CommandEnvelope,
         receipt: CommandReceipt,
-    ) -> Awaitable[CommandOutcome]:
+    ) -> CommandOutcome:
         ...
 
 
@@ -123,6 +127,11 @@ class CommandDispatcher:
                     raise RuntimeError(
                         "command handler failed after attaching a runtime instance"
                     ) from exc
+                logger.exception(
+                    "Command handler failed before runtime attachment: command_id=%s kind=%s",
+                    envelope.command_id,
+                    envelope.payload.kind,
+                )
                 outcome = CommandOutcome(
                     status="rejected",
                     rejection_code="command_handler_failed_before_runtime",

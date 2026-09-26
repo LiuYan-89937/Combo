@@ -54,7 +54,7 @@ class ResumeInterruptCommandHandler:
             )
         except Exception:
             terminal = self._runtime_instances.get(payload.runtime_instance_id)
-            if terminal.status in {"failed", "cancelled"} and terminal.error is not None:
+            if (terminal.status == "failed" or terminal.status == "cancelled") and terminal.error is not None:
                 return CommandOutcome(
                     status=terminal.status,
                     request_id=payload.request_id,

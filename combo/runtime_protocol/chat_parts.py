@@ -177,7 +177,8 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
     activity_key = _tool_activity_key(activity, fallback=uuid4().hex)
     tool_name = str(activity.get("toolName") or activity.get("tool_name") or activity.get("name") or "tool_call")
     call_id = activity.get("toolCallId") or activity.get("tool_call_id")
-    payload = activity.get("payload") if isinstance(activity.get("payload"), dict) else activity
+    raw_payload = activity.get("payload")
+    payload = raw_payload if isinstance(raw_payload, dict) else activity
     status = str(activity.get("status") or "completed")
     parts = [
         {

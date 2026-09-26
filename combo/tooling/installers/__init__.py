@@ -1,3 +1,3 @@
-from combo.tooling.installers.service import CapabilityInstallerService, SkillPackageInstaller
+from combo.tooling.installers.service import SkillPackageInstaller
 
-__all__ = ["CapabilityInstallerService", "SkillPackageInstaller"]
+__all__ = ["SkillPackageInstaller"]

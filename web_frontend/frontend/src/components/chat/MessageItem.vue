@@ -149,11 +149,11 @@ import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import ToolTraceGroup from './ToolTraceGroup.vue'
 import GitChangeCapsule from './GitChangeCapsule.vue'
 import type { GitTurnChanges } from '@/api/git'
-import type { AttachmentMessagePart, ChatMessagePart, ToolExecutionMessagePart, TranscriptItem } from '@/types/protocol'
+import type { ToolExecutionMessagePart, TranscriptItem } from '@/types/protocol'
 import { conversationVisibleMessageParts, conversationVisibleParts } from '@/utils/toolPresentation'
 import { toolTraceSummary } from '@/utils/toolTraceSummary'
-import { isImageResource } from '@/utils/workspaceResources'
 import { formatClockTime, isToday, parseDate } from '@/utils/format'
+import { buildTurnDisplaySections, finalAnswerPart } from '@/utils/conversationTurn'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 
 const props = withDefaults(
@@ -198,60 +198,6 @@ const runtimeErrorPart = computed(() => {
   const part = visibleParts.value[0]
   return part.type === 'error' ? part : null
 })
-type MessageDisplayBlock =
-  | { kind: 'parts'; id: string; parts: ChatMessagePart[] }
-  | { kind: 'images'; id: string; parts: AttachmentMessagePart[] }
-  | { kind: 'tools'; id: string; executions: ToolExecutionMessagePart[]; timestamp: string }
-
-function buildDisplayBlocks(parts: ChatMessagePart[]): MessageDisplayBlock[] {
-  const blocks: MessageDisplayBlock[] = []
-  let currentKind: 'parts' | 'images' | 'tools' | null = null
-  let currentParts: ChatMessagePart[] = []
-  const flush = () => {
-    if (!currentKind || currentParts.length === 0) return
-    if (currentKind === 'parts') {
-      blocks.push({
-        kind: 'parts',
-        id: `parts-${currentParts[0].id}`,
-        parts: currentParts,
-      })
-    } else if (currentKind === 'images') {
-      const images = currentParts.filter(
-        (part): part is AttachmentMessagePart => part.type === 'attachment',
-      )
-      if (images.length > 0) {
-        blocks.push({
-          kind: 'images',
-          id: `images-${images[0].id}`,
-          parts: images,
-        })
-      }
-    } else {
-      const executions = currentParts.filter(
-        (part): part is ToolExecutionMessagePart => part.type === 'tool_execution',
-      )
-      blocks.push({
-        kind: 'tools',
-        id: `tools-${executions[0].id}`,
-        executions,
-        timestamp: executions[0].createdAt || props.message.timestamp,
-      })
-    }
-    currentParts = []
-  }
-  parts.forEach((part) => {
-    const nextKind = part.type === 'tool_execution'
-      ? 'tools'
-      : part.type === 'attachment' && isImageResource(part.attachment.name, part.attachment.mime_type)
-        ? 'images'
-        : 'parts'
-    if (currentKind && currentKind !== nextKind) flush()
-    currentKind = nextKind
-    currentParts.push(part)
-  })
-  flush()
-  return blocks
-}
 const delegatedDelivery = computed(() => (
   Boolean(props.message.metadata?.delegated_delivery)
   && visibleParts.value.some(part => part.type === 'delegated_delivery')
@@ -276,16 +222,9 @@ const workSummary = computed(() => toolTraceSummary(turnExecutions.value))
  * 「最终回答」= 回合里最后一个文本 part，并且它后面没有再发生工具调用。
  * 流式过程中最后一段文本暂作回答；出现后续工具调用时再归入工作记录。
  */
-const answerPartId = computed(() => {
-  if (!isAssistantTurn.value) return ''
-  const parts = turnParts.value
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index]
-    if (part.type === 'tool_execution') return ''
-    if (part.type === 'text') return part.id
-  }
-  return ''
-})
+const answerPartId = computed(() => (
+  isAssistantTurn.value ? finalAnswerPart(turnParts.value)?.id ?? '' : ''
+))
 
 const workNoteCount = computed(() => (
   turnParts.value.filter(part => part.type === 'text' && part.id !== answerPartId.value).length
@@ -345,28 +284,12 @@ const workDigestSegments = computed<Array<{ text: string; tone: 'default' | 'fai
 const workDigestTitle = computed(() => workDigestSegments.value.map(segment => segment.text).join(' · '))
 const showWorkDigest = computed(() => workDigestSegments.value.length > 0)
 
-/**
- * 折叠只收「工作记录」（进展说明 + 工具调用）。产物、附件、错误属于交付物，
- * 必须继续可见——否则收起工作区会把消息里的图片/文件一起藏掉，用户根本点不到。
- */
-const WORK_ONLY_PART_TYPES = new Set(['text', 'reasoning', 'tool_call', 'tool_result', 'tool_execution', 'status'])
-
-const displaySections = computed(() => {
-  if (!showWorkDigest.value) {
-    return [{ id: 'delivery', isWork: false, blocks: buildDisplayBlocks(turnParts.value) }]
-  }
-  const work: ChatMessagePart[] = []
-  const delivery: ChatMessagePart[] = []
-  for (const part of turnParts.value) {
-    const isWork = part.id !== answerPartId.value && WORK_ONLY_PART_TYPES.has(part.type)
-    if (isWork) work.push(part)
-    else delivery.push(part)
-  }
-  return [
-    ...(!workCollapsed.value ? [{ id: 'work', isWork: true, blocks: buildDisplayBlocks(work) }] : []),
-    { id: 'delivery', isWork: false, blocks: buildDisplayBlocks(delivery) },
-  ]
-})
+const displaySections = computed(() => buildTurnDisplaySections(turnParts.value, {
+  answerPartId: answerPartId.value,
+  showWork: showWorkDigest.value,
+  workCollapsed: workCollapsed.value,
+  timestamp: props.message.timestamp,
+}))
 
 const workContentRef = ref<HTMLElement | null>(null)
 usePinnedScroll(workContentRef, () => turnParts.value)
@@ -558,6 +481,31 @@ function formatTime(timestamp: string): string {
 .role-assistant :deep(.message-part.is-turn-answer) .markdown-content {
   color: var(--app-text);
   font-size: 15px;
+  line-height: 1.78;
+}
+
+/* Constrain prose rather than the entire answer, so tables and code can use the chat width. */
+.role-assistant :deep(.message-part.is-turn-answer .markdown-content :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6)) {
+  max-inline-size: min(100%, var(--app-chat-reading-max-width));
+}
+
+.role-assistant :deep(.message-part.is-turn-answer .markdown-content p) {
+  margin-bottom: 1em;
+}
+
+.role-assistant :deep(.message-part.is-turn-answer .markdown-content :is(h1, h2, h3, h4, h5, h6)) {
+  margin-top: 1.8em;
+  margin-bottom: .7em;
+  font-weight: 650;
+}
+
+.role-assistant :deep(.message-part.is-turn-answer .markdown-content li) {
+  margin-bottom: .5em;
+}
+
+.role-assistant :deep(.message-part.is-turn-answer .plain-content) {
+  max-inline-size: min(100%, var(--app-chat-reading-max-width));
+  line-height: 1.78;
 }
 
 /* One viewport owns the complete work timeline, including alternating notes

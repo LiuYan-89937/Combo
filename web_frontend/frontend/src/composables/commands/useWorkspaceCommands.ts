@@ -13,8 +13,13 @@ export function useWorkspaceCommands() {
     return transport.applyEventRequest(workspaceApi.file(scope, path, context, maxChars))
   }
 
+  const deleteWorkspaceProject = (workspaceId: string) => {
+    return transport.applyEventRequest(workspaceApi.deleteProject(workspaceId))
+  }
+
   return {
     refreshWorkspace,
     readFile,
+    deleteWorkspaceProject,
   }
 }

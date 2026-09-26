@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.memory_store import ScopedMemoryStore
 from combo.context_system.assembly import assemble_context_frame
 from combo.context_system.memory_context import MEMORY_CONTEXT_KEY, MEMORY_CONTEXT_VERSION
 from combo.context_system.schema import ContextPolicy, ContextQuery, CrossSessionMemoryPolicy
 from combo.context_system.sources import memory_candidate
 from combo.runtime_protocol import MemoryKind, MemoryScope, RuntimeExecutionIdentity
+from combo.tooling.builtins.runtime_ports import MemoryRuntimePort
 from combo.tooling.builtins.memory.specs import (
     MEMORY_STORE_RESOURCE,
     RUNTIME_IDENTITY_RESOURCE,
@@ -50,7 +50,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     store = resources.get(MEMORY_STORE_RESOURCE)
     identity = resources.get(RUNTIME_IDENTITY_RESOURCE)
-    if not isinstance(store, ScopedMemoryStore):
+    if not isinstance(store, MemoryRuntimePort):
         raise RuntimeError("memory store is not configured")
     if not isinstance(identity, RuntimeExecutionIdentity):
         raise RuntimeError("memory tool requires an owned runtime execution identity")

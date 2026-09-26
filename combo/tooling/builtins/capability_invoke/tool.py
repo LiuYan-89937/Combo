@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.capability_invocation_runtime import (
-    BoundCapabilityInvocationRuntime,
-)
+from combo.tooling.builtins.runtime_ports import CapabilityInvocationPort
 
 
 CAPABILITY_INVOCATION_RUNTIME_RESOURCE = "capability_invocation_runtime"
@@ -12,7 +10,7 @@ CAPABILITY_INVOCATION_RUNTIME_RESOURCE = "capability_invocation_runtime"
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(CAPABILITY_INVOCATION_RUNTIME_RESOURCE)
-    if not isinstance(runtime, BoundCapabilityInvocationRuntime):
+    if not isinstance(runtime, CapabilityInvocationPort):
         raise RuntimeError("capability invocation runtime is not configured")
     target_arguments = arguments.get("arguments")
     if not isinstance(target_arguments, dict):

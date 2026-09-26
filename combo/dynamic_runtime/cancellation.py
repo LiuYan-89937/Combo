@@ -91,7 +91,7 @@ class RuntimeCancellationStore:
                 advance_conversation_revision(conn, current.request.session_id, updated_at=now)
                 return RuntimeCancellationResult(runtime_instance=requested, active_execution=True)
 
-            cancelled = _cancelled_instance(requested, now=now)
+            cancelled, cancellation_error = _cancelled_instance(requested, now=now)
             _replace_instance(conn, cancelled, expected_status=current.status)
             if cancelled.request.runtime_role == "temporary":
                 commit_delegated_task_transition(
@@ -100,7 +100,7 @@ class RuntimeCancellationStore:
                     status="cancelled",
                     event_payload={
                         "kind": "cancelled",
-                        "error": cancelled.error.model_dump(mode="json"),
+                        "error": cancellation_error.model_dump(mode="json"),
                     },
                     now=now,
                     terminal_at=now,
@@ -122,7 +122,7 @@ class RuntimeCancellationStore:
             )
             event = runtime_event_for_instance(
                 cancelled,
-                payload={"kind": "cancelled", "error": cancelled.error.model_dump(mode="json")},
+                payload={"kind": "cancelled", "error": cancellation_error.model_dump(mode="json")},
                 sequence=cancelled.last_event_sequence,
                 session_sequence=next_session_event_sequence(conn, current.request.session_id),
                 created_at=now,
@@ -168,7 +168,7 @@ class CancelRuntimeCommandHandler:
         )
 
 
-def _cancelled_instance(instance: RuntimeInstance, *, now: str) -> RuntimeInstance:
+def _cancelled_instance(instance: RuntimeInstance, *, now: str) -> tuple[RuntimeInstance, RuntimeErrorEnvelope]:
     error = RuntimeErrorEnvelope(
         code="runtime_cancelled",
         category="cancelled",
@@ -180,7 +180,7 @@ def _cancelled_instance(instance: RuntimeInstance, *, now: str) -> RuntimeInstan
         operation=instance.request.policy_snapshot.model.operation,
         details={"reason": instance.cancel_reason or "user_cancelled"},
     )
-    return instance.model_copy(
+    cancelled = instance.model_copy(
         update={
             "status": "cancelled",
             "last_event_sequence": instance.last_event_sequence + 1,
@@ -189,6 +189,7 @@ def _cancelled_instance(instance: RuntimeInstance, *, now: str) -> RuntimeInstan
             "error": error,
         }
     )
+    return cancelled, error
 
 
 def _replace_instance(conn, instance: RuntimeInstance, *, expected_status: str) -> None:

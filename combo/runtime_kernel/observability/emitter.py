@@ -3,7 +3,7 @@ from __future__ import annotations
 from threading import RLock
 from typing import Any
 
-from combo.runtime_kernel.observability.schema import RuntimeObservationEvent
+from combo.runtime_protocol.observation_event import RuntimeObservationEvent
 
 
 class ObservabilityManager:

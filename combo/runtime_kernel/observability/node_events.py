@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langgraph.config import get_stream_writer
 
-from combo.runtime_kernel.observability.schema import RuntimeObservationEvent
+from combo.runtime_protocol.observation_event import RuntimeObservationEvent
 
 
 def emit_runtime_node_event(event: RuntimeObservationEvent) -> None:

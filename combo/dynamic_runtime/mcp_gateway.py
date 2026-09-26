@@ -607,8 +607,10 @@ class MCPGateway:
     ) -> tuple[MCPGatewayTool, ...]:
         server_id = str(raw["server_id"])
         revision = int(raw["revision"])
-        defaults = raw.get("defaults") if isinstance(raw.get("defaults"), dict) else {}
-        overrides = raw.get("tools") if isinstance(raw.get("tools"), dict) else {}
+        raw_defaults = raw.get("defaults")
+        defaults = raw_defaults if isinstance(raw_defaults, dict) else {}
+        raw_overrides = raw.get("tools")
+        overrides = raw_overrides if isinstance(raw_overrides, dict) else {}
         prefix = str(defaults.get("tool_id_prefix") or server_id)
         if not prefix.startswith("mcp_"):
             prefix = f"mcp_{prefix}"
@@ -622,18 +624,16 @@ class MCPGateway:
                 raise ValueError(f"MCP server exposes duplicate or colliding tool names: {server_id}")
             upstream_names.add(upstream_name)
             aliases.add(alias)
-            override = overrides.get(upstream_name) if isinstance(overrides.get(upstream_name), dict) else {}
-            base_policy = ToolRuntimePolicy(
-                risk_level=str(defaults.get("risk_level") or "medium"),
-                allow_parallel_calls=bool(defaults.get("allow_parallel_calls", True)),
-                max_parallel_calls=(
+            raw_override = overrides.get(upstream_name)
+            override = raw_override if isinstance(raw_override, dict) else {}
+            runtime_policy = ToolRuntimePolicy.model_validate({
+                "risk_level": defaults.get("risk_level") or "medium",
+                "allow_parallel_calls": bool(defaults.get("allow_parallel_calls", True)),
+                "max_parallel_calls": (
                     int(raw["connection"].get("max_parallel_requests", 1))
                     if bool(defaults.get("allow_parallel_calls", True))
                     else 1
                 ),
-            )
-            runtime_policy = ToolRuntimePolicy.model_validate({
-                **base_policy.model_dump(mode="json"),
                 **dict(override.get("runtime_policy") or {}),
             })
             description = str(

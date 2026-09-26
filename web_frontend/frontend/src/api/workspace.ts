@@ -31,6 +31,11 @@ export const workspaceApi = {
       `/api/workspace/projects/${encodeURIComponent(workspaceId)}`,
       { method: 'PATCH', body: JSON.stringify(payload) },
     ),
+  deleteProject: (workspaceId: string) =>
+    requestEvent(
+      `/api/workspace/projects/${encodeURIComponent(workspaceId)}`,
+      { method: 'DELETE' },
+    ),
   roots: (context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/workspace/roots', workspaceQuery(context))),
   entries: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>

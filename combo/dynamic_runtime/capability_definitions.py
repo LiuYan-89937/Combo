@@ -9,11 +9,11 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 
 from combo.runtime_protocol.contracts import FrozenProtocolModel
 from combo.runtime_i18n import RuntimeLocale
+from combo.skill_manifest import SKILL_NAME_PATTERN
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MODEL_ALIAS_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-SKILL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,127}$")
 
 CapabilityPlatform = Literal["any", "macos-arm64", "windows-x86_64", "linux-x86_64"]
 ToolApprovalAction = Literal["inherit", "allow", "ask", "deny"]
@@ -40,9 +40,12 @@ RuntimeResourceName = Literal[
 ]
 
 
+SkillContentKind = Literal["instructions", "reference", "template", "example", "asset", "script"]
+
+
 class SkillContentRef(FrozenProtocolModel):
     logical_path: str
-    kind: Literal["instructions", "reference", "template", "example", "asset", "script"]
+    kind: SkillContentKind
     media_type: str
     blob_id: str
     content_digest: str

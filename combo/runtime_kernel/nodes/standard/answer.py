@@ -4,7 +4,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from combo.runtime_kernel.errors import RuntimeKernelError
 from combo.runtime_kernel.nodes.base import NodeExecutionContext
 from combo.runtime_kernel.plan_execute_tools import (
     PLAN_EXECUTE_NODE_IDS,
@@ -31,8 +30,6 @@ class CognitiveAnswerNode:
         context: NodeExecutionContext,
     ) -> dict[str, Any]:
         model_operation_service = context.services.model_operation_service
-        if model_operation_service is None:
-            raise RuntimeKernelError("cognitive.answer requires model_operation_service.")
         visible_tools = _visible_tools(context, state)
         result = model_operation_service.tool_bound_chat(
             state=state,
@@ -111,11 +108,8 @@ class CognitiveAnswerNode:
 def _context_token_budget_patch(metadata: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
     data = dict(metadata or {})
     usage_metadata = data.get("usage_metadata") if isinstance(data.get("usage_metadata"), dict) else {}
-    usage_observation = (
-        data.get("usage_observation")
-        if isinstance(data.get("usage_observation"), dict)
-        else {}
-    )
+    raw_usage_observation = data.get("usage_observation")
+    usage_observation = raw_usage_observation if isinstance(raw_usage_observation, dict) else {}
     token_budget = provider_token_budget_payload(
         usage_metadata=usage_metadata,
         provider_input_tokens=usage_observation.get("input_tokens"),
@@ -143,8 +137,6 @@ def _message_tool_calls(message: AIMessage | None) -> list[dict[str, Any]]:
 
 def _visible_tools(context: NodeExecutionContext, state: RuntimeState) -> list[Any]:
     registry = context.services.tool_registry
-    if registry is None or not hasattr(registry, "model_tools"):
-        raise RuntimeKernelError("cognitive.answer requires a snapshot-bound tool registry.")
     allowed_tool_ids = _model_visible_tool_ids(context, state)
     tools: list[Any] = list(registry.model_tools(without_runtime_plan(allowed_tool_ids)))
     if _runtime_plan_visible(context=context, state=state, allowed_tool_ids=allowed_tool_ids):

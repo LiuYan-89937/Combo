@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Hashable, Mapping
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 
 from combo.runtime_kernel.services import RuntimeServices
 from combo.runtime_kernel.fixed_runner import make_context_preparer, make_fixed_runner
-from combo.runtime_kernel.model_operations import ModelOperationService
 from combo.runtime_kernel.nodes.base import NodeImplementation
 from combo.runtime_kernel.nodes.standard import (
     CognitiveAnswerNode,
@@ -69,8 +69,6 @@ def build_fixed_runtime_graph(
     *,
     services: RuntimeServices,
 ) -> CompiledRuntimeGraph:
-    if not isinstance(services.model_operation_service, ModelOperationService):
-        raise TypeError("fixed runtime graphs require the snapshot-bound ModelOperationService")
     topology = _topology(strategy)
     implementations = _node_implementations()
     node_runners: dict[str, Any] = {}
@@ -103,7 +101,7 @@ def build_fixed_runtime_graph(
         {node.node_id: preparation_nodes.get(node.node_id, node.node_id) for node in topology.nodes},
     )
     for target, preparation in preparation_nodes.items():
-        mapping = {"context.prepared": target, "runtime.steered": preparation, "__end__": END}
+        mapping: dict[Hashable, str] = {"context.prepared": target, "runtime.steered": preparation, "__end__": END}
         graph.add_conditional_edges(preparation, _route_router(mapping), mapping)
     outgoing: dict[str, dict[str, str]] = {}
     for edge in topology.edges:
@@ -112,7 +110,8 @@ def build_fixed_runtime_graph(
         if node.node_id in topology.success_nodes:
             graph.add_edge(node.node_id, END)
             continue
-        mapping = dict(outgoing.get(node.node_id, {}))
+        mapping: dict[Hashable, str] = {}
+        mapping.update(outgoing.get(node.node_id, {}))
         mapping["__end__"] = END
         graph.add_conditional_edges(node.node_id, _route_router(mapping), mapping)
 
@@ -125,9 +124,9 @@ def build_fixed_runtime_graph(
 
 
 def fixed_graph_model_output_visible(strategy: str, node_id: str | None) -> bool:
-    if strategy not in {"react", "plan_and_execute"}:
-        return False
-    return str(node_id or "") in _topology(strategy).visible_model_nodes
+    if strategy == "react" or strategy == "plan_and_execute":
+        return str(node_id or "") in _topology(strategy).visible_model_nodes
+    return False
 
 
 def _entry_router(topology: FixedTopology):
@@ -147,7 +146,7 @@ def _entry_router(topology: FixedTopology):
     return route
 
 
-def _route_router(mapping: dict[str, str]):
+def _route_router(mapping: Mapping[Hashable, str]):
     allowed = set(mapping)
 
     def route(raw_state: dict[str, Any]) -> str:
@@ -155,7 +154,7 @@ def _route_router(mapping: dict[str, str]):
         if state.execution.finished or state.execution.interrupted or state.policy.interrupted:
             return "__end__"
         decision = state.execution.route_decision
-        return decision if decision in allowed else "__end__"
+        return decision if decision is not None and decision in allowed else "__end__"
 
     return route
 

@@ -39,6 +39,7 @@
       show-agent-tag
       @select="enterExistingSession"
       @delete="confirmDeleteSession"
+      @delete-workspace="confirmDeleteWorkspace"
     />
   </div>
 </template>
@@ -51,6 +52,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
+import { useWorkspaceDeletion } from '@/composables/conversation/useWorkspaceDeletion'
 import SessionHistoryList, { type SessionHistoryItem } from '@/components/chat/SessionHistoryList.vue'
 import type { AgentSessionView } from '@/stores/agent'
 
@@ -68,6 +70,7 @@ const { openAgentSession } = useAgentSessionNavigation()
 const { t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
+const { confirmDeleteWorkspace } = useWorkspaceDeletion(locked => emit('interactionLock', locked))
 
 const currentPackage = computed(() => {
   return agentStore.agentPackages.find((pkg) => pkg.package_id === props.packageId) || null

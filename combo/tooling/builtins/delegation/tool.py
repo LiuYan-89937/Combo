@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from combo.dynamic_runtime.delegation_runtime import (
-    BoundDelegationRuntime,
+from combo.runtime_protocol.delegation_requests import (
     DelegationContinuationRequest,
     DelegationMessageRequest,
     DelegationRequest,
@@ -11,12 +10,13 @@ from combo.dynamic_runtime.delegation_runtime import (
 )
 from combo.runtime_protocol import ExecutionStrategy
 from combo.tooling.builtins.delegation.specs import DELEGATION_RUNTIME_RESOURCE
+from combo.tooling.builtins.runtime_ports import DelegationRuntimePort
 from combo.tooling.envelope import tool_envelope
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(DELEGATION_RUNTIME_RESOURCE)
-    if not isinstance(runtime, BoundDelegationRuntime):
+    if not isinstance(runtime, DelegationRuntimePort):
         raise RuntimeError("delegate tool requires a bound delegation runtime")
     result = runtime.delegate(
         DelegationRequest(
@@ -34,7 +34,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 def status(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(DELEGATION_RUNTIME_RESOURCE)
-    if not isinstance(runtime, BoundDelegationRuntime):
+    if not isinstance(runtime, DelegationRuntimePort):
         raise RuntimeError("delegation status requires a bound delegation runtime")
     del arguments
     result = runtime.status()
@@ -43,7 +43,7 @@ def status(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
 
 def continue_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(DELEGATION_RUNTIME_RESOURCE)
-    if not isinstance(runtime, BoundDelegationRuntime):
+    if not isinstance(runtime, DelegationRuntimePort):
         raise RuntimeError("delegate continuation requires a bound delegation runtime")
     result = runtime.continue_task(
         DelegationContinuationRequest(
@@ -57,7 +57,7 @@ def continue_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[
 
 def message_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(DELEGATION_RUNTIME_RESOURCE)
-    if not isinstance(runtime, BoundDelegationRuntime):
+    if not isinstance(runtime, DelegationRuntimePort):
         raise RuntimeError("delegate messaging requires a bound delegation runtime")
     result = runtime.message_task(
         DelegationMessageRequest(

@@ -11,7 +11,7 @@ from combo.file_atomic import atomic_write_text
 from combo.runtime_protocol import CapabilityDraft
 
 
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = 2
 _CACHE_LOCK = RLock()
 
 
@@ -34,7 +34,8 @@ class FileSystemCapabilityDraftCache:
     def resolve(self, sources: tuple[CapabilityDraftSource, ...]) -> tuple[CapabilityDraft, ...]:
         with _CACHE_LOCK:
             current = self._load()
-            cached_entries = current.get("entries") if isinstance(current.get("entries"), dict) else {}
+            raw_entries = current.get("entries")
+            cached_entries = raw_entries if isinstance(raw_entries, dict) else {}
             resolved: list[CapabilityDraft] = []
             next_entries: dict[str, object] = {}
             for source in sources:
@@ -97,5 +98,6 @@ def _directory_inventory(directory: Path) -> list[dict[str, object]]:
             "kind": kind,
             "size": metadata.st_size,
             "modified_ns": metadata.st_mtime_ns,
+            "changed_ns": metadata.st_ctime_ns,
         })
     return inventory

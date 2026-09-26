@@ -157,11 +157,13 @@ class FrontendEventBridge:
         )
 
     def _publish(self, event_principal_id: Any, event: dict[str, Any]) -> None:
-        principal_id = str(event_principal_id or event.get("payload", {}).get("principal_id") or "").strip()
+        principal_id = str(event_principal_id or "").strip()
+        if not principal_id:
+            raise ValueError("frontend event principal identity is missing")
         with self._lock:
             subscriptions = tuple(self._subscriptions)
         for subscription in subscriptions:
-            if principal_id and subscription.principal_id != principal_id:
+            if subscription.principal_id != principal_id:
                 continue
             try:
                 subscription.offer(event)
@@ -211,8 +213,10 @@ class RuntimeEventFanout:
 
 def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
     payload = dict(record.payload)
-    task = payload.get("task") if isinstance(payload.get("task"), dict) else {}
-    event_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    raw_task = payload.get("task")
+    task: dict[str, Any] = raw_task if isinstance(raw_task, dict) else {}
+    raw_event_payload = payload.get("payload")
+    event_payload: dict[str, Any] = raw_event_payload if isinstance(raw_event_payload, dict) else {}
     session_id = str(
         payload.get("session_id")
         or event_payload.get("session_id")
@@ -284,8 +288,10 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
 
 
 def _delegated_question_interrupt(event_payload: dict[str, Any]) -> dict[str, Any] | None:
-    details = event_payload.get("details") if isinstance(event_payload.get("details"), dict) else {}
-    interrupts = details.get("interrupts") if isinstance(details.get("interrupts"), list) else []
+    raw_details = event_payload.get("details")
+    details: dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}
+    raw_interrupts = details.get("interrupts")
+    interrupts = raw_interrupts if isinstance(raw_interrupts, list) else []
     interrupt = next((item for item in interrupts if isinstance(item, dict)), None)
     if interrupt is None:
         return None
@@ -628,13 +634,16 @@ def project_runtime_event(
         event_type = mapping.get(kind)
     if not event_type:
         return []
-    payload = event.payload.model_dump(mode="json")
+    payload: dict[str, Any] = event.payload.model_dump(mode="json")
     if event_type == "tool_approval_requested":
-        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
-        source = details.get("source") if isinstance(details.get("source"), dict) else {}
-        interrupts = details.get("interrupts") if isinstance(details, dict) else []
+        raw_details = payload.get("details")
+        details: dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}
+        raw_source = details.get("source")
+        source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
+        interrupts = details.get("interrupts")
         interrupt = interrupts[0] if isinstance(interrupts, list) and interrupts and isinstance(interrupts[0], dict) else {}
-        nested_requests = interrupt.get("requests") if isinstance(interrupt.get("requests"), list) else []
+        raw_requests = interrupt.get("requests")
+        nested_requests = raw_requests if isinstance(raw_requests, list) else []
         requests = [dict(item) for item in nested_requests if isinstance(item, dict)]
         if not requests:
             requests = [{
@@ -691,10 +700,8 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     steering = raw.pop("steering", None)
     queued_command_id = raw.pop("queued_command_id", None)
     target_command_id = raw.pop("target_command_id", None)
-    try:
-        receipt = CommandReceipt.model_validate(raw)
-    except Exception:
-        return []
+    receipt = CommandReceipt.model_validate(raw)
+    payload: dict[str, Any]
     if (
         record.event_kind == "command_queued"
         and command_kind == "send_message"
@@ -721,10 +728,8 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
         event_type = "run_failed"
         payload = {
             "dispatch_state": "failed",
-            "message": receipt.rejection_code or "command failed before runtime startup",
             "error": {
                 "code": receipt.rejection_code or "command_failed_before_runtime",
-                "message": receipt.rejection_code or "command failed before runtime startup",
             },
         }
     elif record.event_kind == "command_cancelled" and command_kind == "send_message" and receipt.runtime_instance_id is None:

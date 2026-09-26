@@ -62,8 +62,6 @@ class OperationalToolCallNode:
         _emit_plan_activity(context, state, working_state)
 
         registry = context.services.tool_registry
-        if registry is None or not hasattr(registry, "model_tools"):
-            raise RuntimeKernelError("operational.tool_call requires a snapshot-bound tool registry.")
 
         visible_tool_ids = _visible_tool_ids(state, origin_node_id=origin_node_id)
         visible_tools = list(registry.model_tools(visible_tool_ids)) if delegated_calls else []
@@ -72,12 +70,14 @@ class OperationalToolCallNode:
         executable_calls = preflight.allowed_calls
         messages.extend(preflight.denied_messages)
         if executable_calls:
+            if context.graph_config is None or context.graph_runtime is None:
+                raise RuntimeKernelError("tool execution requires graph config and runtime")
             runner = build_tool_node_runner(
                 visible_tools,
                 node_id=context.node_id,
                 name=context.node_id,
                 allowed_tool_ids=set(visible_tool_ids),
-                known_tool_ids=set(registry.list_tool_ids()) if hasattr(registry, "list_tool_ids") else set(visible_tool_ids),
+                known_tool_ids=set(registry.list_tool_ids()),
                 origin_node_id=origin_node_id,
                 origin_impl="cognitive.answer",
                 emit_event=context.emit_event,

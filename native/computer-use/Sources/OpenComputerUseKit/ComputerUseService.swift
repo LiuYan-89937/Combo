@@ -29,10 +29,6 @@ public enum ClickMethod: String, CaseIterable, Sendable {
     case skyClick = "sky_click"
 }
 
-func clickActionSnapshotRecoveryPolicy(for method: ClickMethod) -> SnapshotRecoveryPolicy {
-    .readOnly
-}
-
 func parseClickMethod(_ rawValue: String?) throws -> ClickMethod {
     let normalized = rawValue?
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -50,14 +46,11 @@ func parseClickMethod(_ rawValue: String?) throws -> ClickMethod {
 
 func validateClickMethod(
     _ method: ClickMethod,
-    hasElementIndex: Bool,
-    environment: [String: String]
+    hasElementIndex: Bool
 ) throws {
     if method == .accessibility, !hasElementIndex {
         throw ComputerUseError.message("click_method 'accessibility' requires element_index")
     }
-
-
 }
 
 func validateSkyClickArguments(
@@ -425,8 +418,7 @@ public final class ComputerUseService {
     ) throws -> ToolCallResult {
         try validateClickMethod(
             clickMethod,
-            hasElementIndex: elementIndex != nil,
-            environment: ProcessInfo.processInfo.environment
+            hasElementIndex: elementIndex != nil
         )
         try validateSkyClickArguments(
             method: clickMethod,
@@ -524,7 +516,7 @@ public final class ComputerUseService {
             throw ComputerUseError.invalidArguments("click requires either element_index or x/y")
         }
 
-        return postActionResult(for: query, recoveryPolicy: clickActionSnapshotRecoveryPolicy(for: clickMethod))
+        return postActionResult(for: query, recoveryPolicy: .readOnly)
     }
 
     public func performSecondaryAction(app query: String, elementIndex: String, action: String) throws -> ToolCallResult {

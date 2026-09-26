@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from typing import Mapping
+from uuid import uuid4
+
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.dynamic_runtime.persistence_helpers import insert_outbox
+from combo.dynamic_runtime.repositories.shared import utc_now_text
 from combo.runtime_protocol import OutboxRecord, UserRuntimePolicy
 
 
@@ -10,28 +14,6 @@ class UserRuntimePolicyStore:
 
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
-
-    def create(self, policy: UserRuntimePolicy, *, created_at: str) -> UserRuntimePolicy:
-        if policy.revision != 1:
-            raise ValueError("new runtime policy must start at revision 1")
-        with self._database.transaction() as conn:
-            conn.execute(
-                """
-                insert into user_runtime_policies(
-                  policy_id, principal_id, revision, payload_json, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    policy.policy_id,
-                    policy.principal_id,
-                    policy.revision,
-                    policy.model_dump_json(),
-                    created_at,
-                    policy.updated_at,
-                ),
-            )
-            insert_outbox(conn, _policy_outbox(policy, event_kind="runtime_policy_created"))
-        return policy
 
     def require_for_principal(self, principal_id: str) -> UserRuntimePolicy:
         value = _required_text(principal_id, "principal_id")
@@ -44,26 +26,60 @@ class UserRuntimePolicyStore:
             raise LookupError(f"runtime policy not found for principal: {value}")
         return UserRuntimePolicy.model_validate_json(str(row["payload_json"]))
 
-    def replace(
+    def write(
         self,
-        policy: UserRuntimePolicy,
         *,
-        expected_revision: int,
+        principal_id: str,
+        expected_revision: int | None,
+        changes: Mapping[str, object],
     ) -> UserRuntimePolicy:
-        if policy.revision != expected_revision + 1:
-            raise ValueError("runtime policy revision must increase by one")
+        """Apply a validated policy change through one revision and outbox boundary."""
+        owner = _required_text(principal_id, "principal_id")
+        protected = {"principal_id", "policy_id", "revision", "updated_at"}
+        unknown = changes.keys() - (UserRuntimePolicy.model_fields.keys() - protected)
+        if unknown:
+            raise ValueError(f"unsupported runtime policy fields: {', '.join(sorted(unknown))}")
         with self._database.transaction() as conn:
             row = conn.execute(
-                """
-                select principal_id from user_runtime_policies
-                where policy_id = ? and revision = ?
-                """,
-                (policy.policy_id, expected_revision),
+                "select payload_json from user_runtime_policies where principal_id = ?",
+                (owner,),
             ).fetchone()
             if row is None:
-                raise RuntimeError("runtime policy compare-and-set precondition failed")
-            if str(row["principal_id"]) != policy.principal_id:
-                raise ValueError("runtime policy principal identity cannot change")
+                if expected_revision not in {None, 0}:
+                    raise RuntimeError("runtime_policy_revision_conflict")
+                now = utc_now_text()
+                policy = UserRuntimePolicy.model_validate({
+                    **changes,
+                    "principal_id": owner,
+                    "policy_id": uuid4().hex,
+                    "revision": 1,
+                    "updated_at": now,
+                })
+                conn.execute(
+                    "insert or ignore into principals(principal_id, created_at) values (?, ?)",
+                    (owner, now),
+                )
+                conn.execute(
+                    """
+                    insert into user_runtime_policies(
+                      policy_id, principal_id, revision, payload_json, created_at, updated_at
+                    ) values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (policy.policy_id, owner, 1, policy.model_dump_json(), now, now),
+                )
+                insert_outbox(conn, _policy_outbox(policy, event_kind="runtime_policy_created"))
+                return policy
+            current = UserRuntimePolicy.model_validate_json(str(row["payload_json"]))
+            if expected_revision != current.revision:
+                raise RuntimeError("runtime_policy_revision_conflict")
+            policy = UserRuntimePolicy.model_validate({
+                **current.model_dump(mode="python"),
+                **changes,
+                "revision": current.revision + 1,
+                "updated_at": utc_now_text(),
+            })
+            if policy.model_dump(exclude={"revision", "updated_at"}) == current.model_dump(exclude={"revision", "updated_at"}):
+                return current
             changed = conn.execute(
                 """
                 update user_runtime_policies
@@ -75,12 +91,12 @@ class UserRuntimePolicyStore:
                     policy.model_dump_json(),
                     policy.updated_at,
                     policy.policy_id,
-                    policy.principal_id,
-                    expected_revision,
+                    owner,
+                    current.revision,
                 ),
             ).rowcount
             if changed != 1:
-                raise RuntimeError("runtime policy compare-and-set failed")
+                raise RuntimeError("runtime_policy_revision_conflict")
             insert_outbox(conn, _policy_outbox(policy, event_kind="runtime_policy_updated"))
         return policy
 

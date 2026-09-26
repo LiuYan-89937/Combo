@@ -285,10 +285,10 @@ def _build_runtime_application(backend: RuntimeBackend) -> FastAPI:
             broadcaster=backend.broadcaster,
             principal_resolver=HeaderPrincipalResolver(),
             capability_pools=backend,
+            conversations=backend.conversation_lifecycle,
             config=DynamicRuntimeApiConfig(
                 keepalive_seconds=15.0,
                 replay_limit=256,
-                managed_workspace_root=backend.config.workspace_root,
                 maximum_skill_file_bytes=backend.config.maximum_skill_file_bytes,
                 maximum_skill_bytes=backend.config.maximum_skill_bytes,
                 maximum_tool_file_bytes=backend.config.maximum_tool_file_bytes,

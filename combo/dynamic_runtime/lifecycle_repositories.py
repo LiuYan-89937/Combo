@@ -8,6 +8,7 @@ from combo.runtime_protocol import (
     OutboxRecord,
     RevocationRecord,
 )
+from combo.runtime_protocol.lifecycle import DeleteStatus, DeliveryStatus
 from combo.runtime_protocol.state_machines import (
     DELETE_TRANSITIONS,
     DELIVERY_TRANSITIONS,
@@ -78,7 +79,7 @@ class DeliveryCommitStore:
             )
             insert_outbox(conn, outbox)
 
-    def replace(self, record: DeliveryCommit, *, expected_status: str, outbox: OutboxRecord) -> None:
+    def replace(self, record: DeliveryCommit, *, expected_status: DeliveryStatus, outbox: OutboxRecord) -> None:
         require_transition(expected_status, record.status, DELIVERY_TRANSITIONS, machine="delivery")
         with self._database.transaction() as conn:
             changed = conn.execute(
@@ -130,7 +131,7 @@ class DeletePlanStore:
             )
             insert_outbox(conn, outbox)
 
-    def replace(self, record: DeletePlan, *, expected_status: str, outbox: OutboxRecord) -> None:
+    def replace(self, record: DeletePlan, *, expected_status: DeleteStatus, outbox: OutboxRecord) -> None:
         require_transition(expected_status, record.status, DELETE_TRANSITIONS, machine="delete")
         with self._database.transaction() as conn:
             changed = conn.execute(

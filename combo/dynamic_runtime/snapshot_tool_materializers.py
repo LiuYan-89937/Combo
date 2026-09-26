@@ -12,6 +12,7 @@ from combo.dynamic_runtime.capability_definitions import (
 from combo.dynamic_runtime.snapshot_tool_registry import (
     MaterializedSnapshotTool,
     ReleaseCallback,
+    SnapshotToolKind,
 )
 from combo.runtime_protocol import (
     CapabilityProjectionSnapshot,
@@ -55,7 +56,7 @@ class MCPToolCapabilityRuntimeAdapter(Protocol):
 
 
 class ToolProjectionMaterializer:
-    kind = "tool"
+    kind: SnapshotToolKind = "tool"
 
     def __init__(self, adapter: ToolCapabilityRuntimeAdapter) -> None:
         self._adapter = adapter
@@ -94,7 +95,7 @@ class ToolProjectionMaterializer:
 
 
 class MCPToolProjectionMaterializer:
-    kind = "mcp_tool"
+    kind: SnapshotToolKind = "mcp_tool"
 
     def __init__(self, adapter: MCPToolCapabilityRuntimeAdapter) -> None:
         self._adapter = adapter

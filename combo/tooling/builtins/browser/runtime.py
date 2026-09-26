@@ -294,7 +294,10 @@ class BrowserRuntime:
             operation.close()
             raise RuntimeError("browser runtime is closed")
         future = asyncio.run_coroutine_threadsafe(operation, self._loop)
-        unregister = register_runtime_tool_cancellation(future.cancel)
+        def cancel_operation() -> None:
+            future.cancel()
+
+        unregister = register_runtime_tool_cancellation(cancel_operation)
         try:
             return future.result(timeout=timeout)
         finally:
@@ -315,23 +318,25 @@ class BrowserRuntime:
                     "Playwright is not installed. Install project dependencies and run "
                     "'python -m playwright install chromium'."
                 ) from exc
-            self._playwright = await async_playwright().start()
+            playwright = await async_playwright().start()
+            self._playwright = playwright
             launch_options: dict[str, Any] = {"headless": self.config.headless}
             if self.config.executable_path:
                 launch_options["executable_path"] = self.config.executable_path
             try:
-                self._browser = await self._playwright.chromium.launch(**launch_options)
-                self._browser_user_agent = await self._resolve_browser_user_agent()
+                browser = await playwright.chromium.launch(**launch_options)
+                self._browser = browser
+                self._browser_user_agent = await self._resolve_browser_user_agent(browser)
             except Exception as exc:
-                await self._playwright.stop()
+                await playwright.stop()
                 self._playwright = None
                 raise RuntimeError(
                     "Chromium could not be started. Run 'python -m playwright install chromium' "
                     f"or configure COMBO_BROWSER_EXECUTABLE_PATH. Detail: {exc}"
                 ) from exc
 
-    async def _resolve_browser_user_agent(self) -> str:
-        cdp = await self._browser.new_browser_cdp_session()
+    async def _resolve_browser_user_agent(self, browser: Any) -> str:
+        cdp = await browser.new_browser_cdp_session()
         try:
             version = await cdp.send("Browser.getVersion")
         finally:
@@ -358,7 +363,10 @@ class BrowserRuntime:
             raise RuntimeError("browser context capacity is exhausted")
         resolved_locale = _required_session_setting(locale, "browser locale")
         resolved_timezone = _required_session_setting(timezone_id, "browser timezone")
-        context = await self._browser.new_context(
+        browser = self._browser
+        if browser is None:
+            raise RuntimeError("browser runtime did not start")
+        context = await browser.new_context(
             accept_downloads=True,
             service_workers="block",
             viewport={
@@ -767,9 +775,8 @@ class BrowserRuntime:
         verification_visible = False
         if await verification_locator.count():
             verification_visible = await verification_locator.first.is_visible()
-        if body_text is None:
-            body_text = await page.locator("body").inner_text()
-        has_visible_content = bool(body_text.strip()) or bool((await page.title()).strip())
+        resolved_body_text = body_text if body_text is not None else await page.locator("body").inner_text()
+        has_visible_content = bool(resolved_body_text.strip()) or bool((await page.title()).strip())
 
         if verification_visible or latest_status == 412:
             state = "verification_required"

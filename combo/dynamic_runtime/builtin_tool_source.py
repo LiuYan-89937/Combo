@@ -5,7 +5,10 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from combo.dynamic_runtime.capability_definitions import (
+    RuntimeResourceName,
     ToolDefinition,
     ToolImplementation,
     ToolLoopPolicy,
@@ -268,13 +271,15 @@ class BuiltinToolCapabilitySource:
         return {str(key): dict(value) for key, value in overrides.items()}
 
     @staticmethod
-    def _runtime_resources(spec: ToolSpec) -> tuple[str, ...]:
-        names: list[str] = []
+    def _runtime_resources(spec: ToolSpec) -> tuple[RuntimeResourceName, ...]:
+        names: list[RuntimeResourceName] = []
+        resource_type = TypeAdapter(RuntimeResourceName)
         for local_name, resource_name in spec.resources.items():
             if local_name != resource_name:
                 raise ValueError(
                     f"builtin runtime resource aliases must be identical: {spec.id}:{local_name}"
                 )
-            if resource_name not in names:
-                names.append(resource_name)
+            validated_name = resource_type.validate_python(resource_name)
+            if validated_name not in names:
+                names.append(validated_name)
         return tuple(names)

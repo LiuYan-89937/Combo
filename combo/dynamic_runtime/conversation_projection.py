@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
@@ -17,6 +17,14 @@ from combo.runtime_protocol import (
     ToolResultPart,
 )
 from combo.runtime_kernel.planning import RUNTIME_PLAN_TOOL_ID
+
+
+ToolResultStatus = Literal["completed", "failed", "cancelled", "rejected", "timed_out"]
+
+
+class _ToolMessageTiming(TypedDict, total=False):
+    started_at: str
+    completed_at: str
 
 
 def conversation_to_graph_messages(messages: list[ConversationMessage]) -> list[BaseMessage]:
@@ -249,7 +257,7 @@ def _message_text(message: BaseMessage) -> str:
 def _tool_result_part(message: ToolMessage) -> ToolResultPart:
     payload = _json_object_or_text(message.content)
     raw_status = str(payload.get("status") or payload.get("execution_status") or "completed").strip()
-    status = {
+    statuses: dict[str, ToolResultStatus] = {
         "completed": "completed",
         "success": "completed",
         "failed": "failed",
@@ -259,7 +267,8 @@ def _tool_result_part(message: ToolMessage) -> ToolResultPart:
         "tool_not_allowed": "rejected",
         "timed_out": "timed_out",
         "timeout": "timed_out",
-    }.get(raw_status, "failed")
+    }
+    status = statuses.get(raw_status, "failed")
     if status == "completed":
         output = payload.get("output")
         return ToolResultPart(
@@ -281,15 +290,17 @@ def _message_reasoning(message: BaseMessage) -> str:
     return str(getattr(message, "additional_kwargs", {}).get("reasoning_content") or "").strip()
 
 
-def _tool_message_timing(message: ToolMessage) -> dict[str, str]:
+def _tool_message_timing(message: ToolMessage) -> _ToolMessageTiming:
     timing = getattr(message, "additional_kwargs", {}).get("combo_tool_timing")
     if not isinstance(timing, dict):
         return {}
-    result: dict[str, str] = {}
-    for target, source in (("started_at", "started_at"), ("completed_at", "completed_at")):
-        value = str(timing.get(source) or "").strip()
-        if value:
-            result[target] = value
+    result: _ToolMessageTiming = {}
+    started_at = str(timing.get("started_at") or "").strip()
+    completed_at = str(timing.get("completed_at") or "").strip()
+    if started_at:
+        result["started_at"] = started_at
+    if completed_at:
+        result["completed_at"] = completed_at
     return result
 
 

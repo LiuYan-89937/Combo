@@ -48,41 +48,26 @@ class QueuedRuntimeInputDelivery:
 
     def _resolve_attachments(
         self,
-        command_id: str,
         principal_id: str,
         active: Any,
         references: Sequence[AttachmentRevisionRef],
     ) -> tuple[dict[str, Any], ...]:
-        """Import the queued message's attachments into the active runtime scope.
-
-        Attachment resolution is best effort: a stale staged upload must not
-        block the user's guidance, but the failure is logged instead of silently
-        dropping the attachments.
-        """
-        resolved_references = tuple(references or ())
+        """Import every queued attachment into the active runtime scope."""
+        resolved_references = tuple(references)
         if not resolved_references:
             return ()
         if self._attachments is None:
-            logger.warning(
-                "steering attachments were dropped because no resolver is configured: %s",
-                command_id,
-            )
-            return ()
+            raise RuntimeError("steering attachment resolver is not configured")
         request = active.request
-        try:
-            return self._attachments.resolve_runtime_attachments(
-                principal_id=principal_id,
-                workspace_id=request.workspace_id,
-                references=resolved_references,
-                runtime_instance_id=active.runtime_instance_id,
-            )
-        except Exception:
-            logger.warning(
-                "steering attachments could not be resolved for command %s",
-                command_id,
-                exc_info=True,
-            )
-            return ()
+        imported = self._attachments.resolve_runtime_attachments(
+            principal_id=principal_id,
+            workspace_id=request.workspace_id,
+            references=resolved_references,
+            runtime_instance_id=active.runtime_instance_id,
+        )
+        if len(imported) != len(resolved_references):
+            raise RuntimeError("steering attachment import returned an incomplete set")
+        return imported
 
     def deliver(
         self,
@@ -128,11 +113,12 @@ class QueuedRuntimeInputDelivery:
                 rejection_code="active_runtime_not_available_for_steering",
             )
         content = str(message.content or "").strip()
-        attachments = self._resolve_attachments(command_id, principal_id, active, message.attachments)
+        try:
+            attachments = self._resolve_attachments(principal_id, active, message.attachments)
+        except Exception:
+            logger.exception("steering attachments could not be resolved for command %s", command_id)
+            return CommandOutcome(status="rejected", rejection_code="steering_content_unavailable")
         if not content and not attachments:
-            # An attachment-only message whose files can no longer be imported has
-            # nothing left to steer with; keep it queued instead of injecting an
-            # empty turn.
             return CommandOutcome(
                 status="rejected",
                 rejection_code="steering_content_unavailable",

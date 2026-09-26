@@ -79,12 +79,26 @@
           <strong>{{ t('sessions.newInWorkspace') }}</strong>
           <span>{{ t('sessions.newInWorkspaceDescription') }}</span>
         </div>
-        <n-select
-          v-model:value="selectedWorkspaceId"
-          :options="workspaceOptions"
-          filterable
-          :placeholder="t('sessions.selectWorkspace')"
-        />
+        <div class="workspace-choice-list" role="group" :aria-label="t('sessions.selectWorkspace')">
+          <div v-for="workspace in selectableWorkspaces" :key="workspace.workspace_id" class="workspace-choice-row">
+            <button
+              type="button"
+              class="workspace-choice"
+              :class="{ selected: selectedWorkspaceId === workspace.workspace_id }"
+              :aria-pressed="selectedWorkspaceId === workspace.workspace_id"
+              @click="selectedWorkspaceId = workspace.workspace_id"
+            >
+              <span><strong>{{ workspace.title }}</strong><small>{{ workspace.workdir_root }}</small></span>
+              <span v-if="selectedWorkspaceId === workspace.workspace_id" aria-hidden="true">✓</span>
+            </button>
+            <button
+              type="button"
+              class="workspace-choice-delete"
+              :aria-label="t('sessions.deleteWorkspace')"
+              @click="confirmDeleteWorkspace(workspace.workspace_id, workspace.title, workspace.root_kind, () => { void refreshWorkspaces() })"
+            ><n-icon><TrashOutline /></n-icon></button>
+          </div>
+        </div>
         <div class="shared-workspace-actions">
           <n-button
             secondary
@@ -142,12 +156,11 @@ import {
   NList,
   NListItem,
   NModal,
-  NSelect,
   NSpin,
   NText,
   useMessage,
 } from 'naive-ui'
-import { CloseOutline, FolderOutline } from '@/components/icons'
+import { CloseOutline, FolderOutline, TrashOutline } from '@/components/icons'
 import {
   NativeDirectoryPickerUnavailableError,
   selectLocalDirectory,
@@ -158,6 +171,7 @@ import {
   type WorkspaceProjectView,
 } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
+import { useWorkspaceDeletion } from '@/composables/conversation/useWorkspaceDeletion'
 import GitWorkspaceImport from '@/components/workspace/GitWorkspaceImport.vue'
 
 const props = defineProps<{
@@ -171,6 +185,7 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const message = useMessage()
+const { confirmDeleteWorkspace } = useWorkspaceDeletion(() => {})
 const workspaces = ref<WorkspaceProjectView[]>([])
 const selectedWorkspaceId = ref<string | null>(null)
 const selectingLinkedWorkspace = ref(false)
@@ -200,12 +215,17 @@ const dialogTitle = computed(() => (
 const visibleDirectories = computed(() => (
   currentPath.value ? directories.value : directoryRoots.value
 ))
-const workspaceOptions = computed(() => workspaces.value
-  .filter(workspace => workspace.mode === 'project')
-  .map(workspace => ({
-    label: `${workspace.title} — ${workspace.workdir_root}`,
-    value: workspace.workspace_id,
-  })))
+const selectableWorkspaces = computed(() => {
+  const unique = new Map<string, WorkspaceProjectView>()
+  for (const workspace of [...workspaces.value].sort((left, right) => left.created_at.localeCompare(right.created_at))) {
+    if (workspace.mode !== 'project' || workspace.archived) continue
+    const key = workspace.root_kind === 'linked'
+      ? `linked:${workspace.workdir_root.replace(/[\\/]+$/, '')}`
+      : workspace.workspace_id
+    if (!unique.has(key)) unique.set(key, workspace)
+  }
+  return [...unique.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+})
 
 watch(
   () => props.show,
@@ -224,13 +244,14 @@ watch(
 async function refreshWorkspaces() {
   try {
     workspaces.value = (await workspaceApi.projects()).workspaces
-    const selectableIds = new Set(
-      workspaces.value
-        .filter(workspace => workspace.mode === 'project')
-        .map(workspace => workspace.workspace_id),
-    )
-    if (!selectedWorkspaceId.value || !selectableIds.has(selectedWorkspaceId.value)) {
-      selectedWorkspaceId.value = null
+    const selectableIds = new Set(selectableWorkspaces.value.map(workspace => workspace.workspace_id))
+    if (selectedWorkspaceId.value && !selectableIds.has(selectedWorkspaceId.value)) {
+      const selected = workspaces.value.find(workspace => workspace.workspace_id === selectedWorkspaceId.value)
+      selectedWorkspaceId.value = selectableWorkspaces.value.find(workspace => (
+        selected?.root_kind === 'linked'
+        && workspace.root_kind === 'linked'
+        && workspace.workdir_root === selected.workdir_root
+      ))?.workspace_id || null
     }
   } catch (error) {
     showError(error)
@@ -440,6 +461,39 @@ button.new-session-option:hover {
   display: grid;
   gap: var(--app-space-xs);
 }
+
+.workspace-choice-list {
+  display: grid;
+  gap: var(--app-space-xs);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.workspace-choice-row { display: flex; align-items: stretch; gap: var(--app-space-xs); }
+
+.workspace-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-sm);
+  width: 100%;
+  padding: var(--app-space-sm);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-elevated);
+  color: var(--app-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-choice.selected { border-color: var(--app-text); }
+.workspace-choice span:first-child { display: grid; min-width: 0; gap: 2px; }
+.workspace-choice strong, .workspace-choice small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-choice small { color: var(--app-text-muted); }
+.workspace-choice:focus-visible { outline: 2px solid var(--app-text); }
+.workspace-choice-delete { flex: 0 0 34px; display: grid; place-items: center; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface-elevated); color: var(--app-text-muted); cursor: pointer; }
+.workspace-choice-delete:hover { color: var(--app-text); border-color: var(--app-text); }
+.workspace-choice-delete:focus-visible { outline: 2px solid var(--app-text); }
 
 .shared-workspace-actions,
 .new-session-footer {

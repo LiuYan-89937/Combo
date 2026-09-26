@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from ruamel.yaml import YAML
 
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
@@ -18,6 +18,7 @@ from combo.dynamic_runtime.capability_definitions import (
     ToolEffect,
     ToolImplementation,
     ToolLoopPolicy,
+    ToolPackageFileRef,
     ToolRuntimePolicy,
     RuntimeResourceName,
 )
@@ -85,9 +86,9 @@ class ToolPackageManifest(BaseModel):
     keywords: tuple[str, ...] = ()
     entrypoint: str = "main:run"
     schema_error_guidance: str = ""
-    input_schema: dict[str, object]
-    context_schema: dict[str, object] = Field(default_factory=dict)
-    output_schema: dict[str, object]
+    input_schema: dict[str, JsonValue]
+    context_schema: dict[str, JsonValue] = Field(default_factory=dict)
+    output_schema: dict[str, JsonValue]
     permissions: ToolPackagePermissions = Field(default_factory=ToolPackagePermissions)
     execution: ToolPackageExecution = Field(default_factory=ToolPackageExecution)
     loop_policy: ToolLoopPolicy = Field(default_factory=ToolLoopPolicy)
@@ -239,7 +240,7 @@ class FileSystemToolCapabilitySource:
             raise ValueError(f"ToolPackage entrypoint module is unavailable: {entry_path}")
         _validate_entrypoint_contract(entry_path, entry_function)
 
-        files = []
+        files: list[ToolPackageFileRef] = []
         portable_paths: set[str] = set()
         total_bytes = 0
         for path in sorted(directory.rglob("*"), key=lambda item: item.as_posix()):
@@ -383,7 +384,7 @@ def _requirements(path: Path) -> list[str]:
     return normalize_python_requirements(values)
 
 
-def _package_digest(files: list[object]) -> str:
+def _package_digest(files: list[ToolPackageFileRef]) -> str:
     payload = [
         {
             "logical_path": item.logical_path,

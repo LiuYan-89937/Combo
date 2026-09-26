@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.image_generation_runtime import ImageGenerationRuntime
+from combo.tooling.builtins.runtime_ports import ImageGenerationRuntimePort
 from combo.tooling.builtins.image_generation.specs import IMAGE_GENERATION_RUNTIME_RESOURCE
 from combo.tooling.envelope import tool_envelope
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(IMAGE_GENERATION_RUNTIME_RESOURCE)
-    if not isinstance(runtime, ImageGenerationRuntime):
+    if not isinstance(runtime, ImageGenerationRuntimePort):
         raise RuntimeError("image generation runtime is not configured")
     assets = runtime.generate(arguments)
     output: dict[str, Any] = {"assets": assets}

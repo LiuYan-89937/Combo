@@ -663,6 +663,11 @@ def _tool_surface(
     for projection in projections:
         if not projection.model_tool_ids:
             continue
+        kind = projection.kind
+        if kind != "tool" and kind != "mcp_tool":
+            raise CapabilityResolutionError(
+                f"non-tool capability exposes model tool aliases: {projection.capability_id}"
+            )
         for alias in projection.model_tool_ids:
             owner = aliases.get(alias)
             if owner is not None and owner.capability_id != projection.capability_id:
@@ -672,7 +677,7 @@ def _tool_surface(
             binding = CapabilityToolAliasBinding(
                 model_alias=alias,
                 capability_id=projection.capability_id,
-                kind=projection.kind,
+                kind=kind,
                 revision=projection.revision,
                 content_digest=projection.content_digest,
             )

@@ -45,7 +45,10 @@ export function groupSessionsByWorkspace<T extends WorkspaceGroupedSession>(
       continue
     }
 
-    const existing = workspaceGroups.get(workspaceId)
+    const groupingKey = workspace.root_kind === 'linked'
+      ? `linked:${workspace.workdir_root.trim().replace(/[\\/]+$/, '')}`
+      : workspaceId
+    const existing = workspaceGroups.get(groupingKey)
     if (existing) {
       existing.sessions.push(session)
       continue
@@ -53,13 +56,13 @@ export function groupSessionsByWorkspace<T extends WorkspaceGroupedSession>(
 
     const group: WorkspaceSessionGroup<T> = {
       kind: 'workspace',
-      key: `workspace:${workspaceId}`,
+      key: `workspace:${groupingKey}`,
       workspaceId,
       name: workspaceFolderName(workspace),
       path: workspace.workdir_root,
       sessions: [session],
     }
-    workspaceGroups.set(workspaceId, group)
+    workspaceGroups.set(groupingKey, group)
     entries.push(group)
   }
 

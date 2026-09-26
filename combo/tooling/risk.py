@@ -6,8 +6,8 @@ from typing import Any, Callable
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from combo.models import get_task_model
-from combo.runtime_kernel.structured_output import (
+from combo.model_pool.resolver import resolve_available_chat_model
+from combo.model_invocation.structured_output import (
     execute_structured_output_invocation,
     prepare_structured_output_invocation,
 )
@@ -34,7 +34,8 @@ def call_llm_risk_evaluator(
     context: dict[str, Any],
     hard_result: ToolRiskResult | None = None,
 ) -> ToolRiskResult:
-    model = get_task_model()
+    resolved = resolve_available_chat_model("task")
+    model = resolved.model if resolved is not None else None
     if model is None:
         return ToolRiskResult(
             action="uncertain",
@@ -104,8 +105,9 @@ def merge_risk_results(results: list[ToolRiskResult], *, base_risk_level: ToolRi
     )
 
 
-def _strongest_action(actions: list[str]) -> str:
-    for candidate in ("deny", "ask", "uncertain", "allow"):
+def _strongest_action(actions: list[ToolRiskAction]) -> ToolRiskAction:
+    priority: tuple[ToolRiskAction, ...] = ("deny", "ask", "uncertain", "allow")
+    for candidate in priority:
         if candidate in actions:
             return candidate
     return "inherit"

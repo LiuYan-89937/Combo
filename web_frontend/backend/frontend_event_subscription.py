@@ -9,38 +9,30 @@ _TEXT_DELTA_EVENTS = frozenset({
 })
 
 
-class _PendingDeltas:
-    def __init__(self) -> None:
-        self.events: dict[tuple[Any, ...], dict[str, Any]] = {}
-
-    def append(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        key = self.key(event)
-        if key is None:
-            self.events.clear()
-        elif pending := self.events.get(key):
-            pending["payload"]["delta"] += event["payload"]["delta"]
-            pending["timestamp"] = event.get("timestamp")
-            return None
-        queued = {**event, "payload": dict(event.get("payload") or {})}
-        if key is not None:
-            self.events[key] = queued
-        return queued
-
-    @staticmethod
-    def key(event: dict[str, Any]) -> tuple[Any, ...] | None:
-        payload = event.get("payload") or {}
-        if event.get("event_type") not in _TEXT_DELTA_EVENTS or not isinstance(payload.get("delta"), str):
-            return None
-        return (
-            event.get("event_type"), event.get("run_id"), event.get("request_id"),
-            event.get("node_id"), payload.get("stream_id"),
-            payload.get("message_id"), payload.get("part_id"),
-        )
-
-
 def compact_frontend_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    pending = _PendingDeltas()
-    return [queued for event in events if (queued := pending.append(event)) is not None]
+    compacted: list[dict[str, Any]] = []
+    previous_key: tuple[Any, ...] | None = None
+    for event in events:
+        key = _delta_key(event)
+        if key is not None and key == previous_key:
+            previous = compacted[-1]
+            previous["payload"]["delta"] += event["payload"]["delta"]
+            previous["timestamp"] = event.get("timestamp")
+        else:
+            compacted.append({**event, "payload": dict(event.get("payload") or {})})
+        previous_key = key
+    return compacted
+
+
+def _delta_key(event: dict[str, Any]) -> tuple[Any, ...] | None:
+    payload = event.get("payload") or {}
+    if event.get("event_type") not in _TEXT_DELTA_EVENTS or not isinstance(payload.get("delta"), str):
+        return None
+    return (
+        event.get("event_type"), event.get("run_id"), event.get("request_id"),
+        event.get("node_id"), payload.get("stream_id"),
+        payload.get("message_id"), payload.get("part_id"),
+    )
 
 
 class FrontendEventSubscription:

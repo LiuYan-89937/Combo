@@ -7,10 +7,9 @@ from pathlib import Path
 from typing import Any, Protocol, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from combo.dynamic_runtime.runtime_service import (
-    RuntimeLaunchContext,
-    RuntimeLaunchContextResolver,
-)
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from combo.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from combo.runtime_attachments import (
     import_runtime_attachments,
     workspace_attachment_root,
@@ -25,6 +24,39 @@ from combo.runtime_protocol import (
 )
 from combo.dynamic_runtime.delegation_store import DelegationStore
 from combo.runtime_i18n import RuntimeLocale, normalize_runtime_locale
+
+
+class RuntimeLaunchContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    system_prompt: str
+    temporal_context: str
+    locale: RuntimeLocale = "zh-CN"
+    capability_instructions: str = ""
+    turn_directives: tuple[str, ...] = ()
+    workspace_root_alias: str = DEFAULT_BUILTIN_WORKSPACE_ROOT
+    allow_external_paths: bool = False
+    workspace_mounts: tuple[dict[str, Any], ...] = ()
+    attachments: tuple[dict[str, Any], ...] = ()
+
+    @field_validator("system_prompt", "temporal_context", "workspace_root_alias")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("runtime launch text must not be empty")
+        return text
+
+
+class RuntimeLaunchContextResolver(Protocol):
+    def resolve(
+        self,
+        *,
+        instance: RuntimeInstance,
+        messages: list[ConversationMessage],
+        capability_snapshot: CapabilitySnapshot,
+    ) -> RuntimeLaunchContext:
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,8 +413,10 @@ def render_delegation_notification_message(event: Any) -> str:
     payload = event.payload if isinstance(event.payload, dict) else {}
     task_name = str(payload.get("agent_name") or "Delegated task").strip()
     objective = str(payload.get("objective") or "").strip()
-    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    raw_error = payload.get("error")
+    error = raw_error if isinstance(raw_error, dict) else {}
+    raw_details = error.get("details")
+    details = raw_details if isinstance(raw_details, dict) else {}
     reason = str(
         details.get("reason")
         or details.get("message")

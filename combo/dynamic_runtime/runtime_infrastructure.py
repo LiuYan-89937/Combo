@@ -15,7 +15,8 @@ from combo.dynamic_runtime.mcp_content_runtime import MCPBinaryContentMaterializ
 from combo.dynamic_runtime.image_generation_runtime import ImageGenerationRuntime
 from combo.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
 from combo.dynamic_runtime.capability_invocation_runtime import CapabilityInvocationRuntime
-from combo.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
+from combo.dynamic_runtime.knowledge_store import GlobalKnowledgeStore
+from combo.dynamic_runtime.scheduler_store import WorkspaceSchedulerStore
 from combo.dynamic_runtime.memory_store import ScopedMemoryStore
 from combo.dynamic_runtime.skill_runtime import MainSkillRuntime, SnapshotSkillRuntime
 from combo.dynamic_runtime.delegation_store import DelegationStore
@@ -52,7 +53,7 @@ from combo.computer_use import ComputerUseCoordinator
 from combo.tooling.builtins.process.manager import ProcessManager, ProcessRuntimeResource
 from combo.tooling.builtins.process.runtime import resolve_shell_runtime
 from combo.tooling.skillhub.service import SkillHubService
-from combo.tooling.installers.service import CapabilityInstallerService
+from combo.dynamic_runtime.capability_installer import CapabilityInstallerService
 from combo.tooling.builtins.filesystem.common import FilesystemRuntimeResource
 from combo.tooling.builtins.filesystem.file_locks import WorkspaceFileLockManager
 from combo.tooling.builtins.filesystem.staged_write import StagedWriteStore
@@ -323,7 +324,9 @@ class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
                 arguments,
             )
             output = envelope.get("output")
-            result = output.get("result") if isinstance(output, dict) else None
+            if not isinstance(output, dict):
+                return envelope
+            result = output.get("result")
             if not isinstance(result, dict):
                 return envelope
             materialized = materializer.materialize_tool_result(

@@ -7,9 +7,8 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
 from combo.exception_details import exception_leaf_messages, exception_summary
+from combo.runtime_protocol.interruption import RuntimeToolExecutionCancelled, RuntimeToolExecutionTimedOut
 from combo.tooling.execution_context import (
-    RuntimeToolExecutionCancelled,
-    RuntimeToolExecutionTimedOut,
     current_tool_approval_override,
     current_tool_call,
     current_tool_event_sink,
@@ -75,12 +74,21 @@ class ToolApprovalTrustResolver(Protocol):
         ...
 
 
+class ToolEntrypoint(Protocol):
+    def __call__(
+        self,
+        *,
+        arguments: dict[str, Any],
+        resources: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+
 @dataclass(slots=True)
 class ToolExecutionGateway:
     spec: ToolSpec
     input_schema: CompiledJsonSchema
     output_schema: CompiledJsonSchema
-    entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+    entrypoint: ToolEntrypoint
     global_resources: Mapping[str, Any]
     approval_policy: ToolApprovalPolicyConfig
     max_revisions: int
@@ -291,7 +299,7 @@ class ToolExecutionGateway:
             return None
         try:
             tool_resources = self._resolve_resources()
-        except Exception:
+        except ToolResourceRequiredError:
             return None
         risk_context_resources = build_tool_resource_context(tool_resources)
         normalized_arguments, risk = self._evaluate_risk(arguments, risk_context_resources)
@@ -491,7 +499,7 @@ class ToolExecutionGateway:
 
 def _runtime_stop_requested() -> bool:
     control = current_runtime_run_control()
-    return bool(control is not None and getattr(control, "drain_requested", False))
+    return control.drain_requested if control is not None else False
 
 
 def _risk_guidance(risk: ToolRiskResult) -> str:

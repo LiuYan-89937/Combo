@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TypeVar
 
 from combo.runtime_protocol.commands import CommandStatus
 from combo.runtime_protocol.conversation import ConversationTurnStatus
@@ -14,6 +15,9 @@ from combo.runtime_protocol.tool_calls import ToolCallStatus
 
 class InvalidStateTransition(ValueError):
     pass
+
+
+StatusT = TypeVar("StatusT", bound=str)
 
 
 RUNTIME_INSTANCE_TRANSITIONS: Mapping[RuntimeInstanceStatus, frozenset[RuntimeInstanceStatus]] = {
@@ -82,7 +86,13 @@ DELETE_TRANSITIONS: Mapping[DeleteStatus, frozenset[DeleteStatus]] = {
 }
 
 
-def require_transition(current: str, target: str, transitions: Mapping[str, frozenset[str]], *, machine: str) -> None:
+def require_transition(
+    current: StatusT,
+    target: StatusT,
+    transitions: Mapping[StatusT, frozenset[StatusT]],
+    *,
+    machine: str,
+) -> None:
     allowed = transitions.get(current)
     if allowed is None:
         raise InvalidStateTransition(f"unknown {machine} state: {current}")

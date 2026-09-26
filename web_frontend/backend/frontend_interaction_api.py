@@ -7,12 +7,13 @@ from ipaddress import ip_address
 import json
 import mimetypes
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from combo.agent_worktree import AgentWorktreeManager, WorktreeError, worktree_label
 from combo.dynamic_runtime.repositories import utc_now_text
@@ -22,11 +23,19 @@ from combo.model_pool import ModelPoolStore
 from combo.model_pool.store import ModelPoolStoreError
 from combo.native_directory_picker import NativeDirectoryPicker, NativeDirectoryPickerUnavailableError
 from combo.runtime_protocol import (
+    ApprovalMode,
+    AttachmentRevisionRef,
+    CancelCommandRequestPayload,
+    CancelRuntimeRequestPayload,
     CommandEnvelope,
     CommandReceipt,
     DEFAULT_REASONING_INTENSITY,
+    ExecutionPreference,
+    ResumeInterruptPayload,
     RuntimeProtocolDescriptor,
     RuntimeEvent,
+    SendMessagePayload,
+    SteerRuntimeRequestPayload,
     ToolCallRecord,
     UserRuntimePolicy,
     is_runtime_cancellation,
@@ -55,7 +64,7 @@ class FrontendCommandRequest(BaseModel):
 class BackgroundTaskSettingsWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_parallel_sub_agents: int = Field(ge=0)
-    revision: int | None = None
+    revision: int | None = Field(default=None, ge=0)
 
 
 class BackgroundTaskCancelWrite(BaseModel):
@@ -71,16 +80,16 @@ class BackgroundTaskInteractionWrite(BaseModel):
 
 class RuntimePreferencesWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    expected_revision: int | None = None
-    execution_preference: str | None = None
+    expected_revision: int | None = Field(default=None, ge=0)
+    execution_preference: ExecutionPreference | None = None
     model_profile_id: str | None = None
     reasoning_intensity: int | None = Field(default=None, ge=1, le=3)
-    approval_mode: str | None = None
-    request_timeout_seconds: int | None = None
+    approval_mode: ApprovalMode | None = None
+    request_timeout_seconds: int | None = Field(default=None, ge=1)
     builtin_tool_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     browser_operation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     browser_navigation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
-    max_retries: int | None = None
+    max_retries: int | None = Field(default=None, ge=0)
     max_parallel_sub_agents: int | None = Field(default=None, ge=0)
     context_compression_detail: Literal["concise", "standard", "detailed"] | None = None
     context_compression_keep_recent_messages: int | None = Field(default=None, ge=0, le=128)
@@ -92,9 +101,8 @@ class RuntimePreferencesWrite(BaseModel):
 
 
 class MemoryDeleteRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     memory_id: str
-    workspace_id: str | None = None
 
 
 class KnowledgeRetrievalSettingsWrite(BaseModel):
@@ -202,15 +210,14 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=session_id,
-                payload={
-                    "kind": "send_message",
-                    "message_id": f"user-{command_id}",
-                    "content": content,
-                    "attachments": attachment_references,
-                    "execution_preference": turn_policy.execution_preference,
-                    "approval_mode": turn_policy.approval_mode,
-                    "force_collaboration": bool(payload.get("force_collaboration", False)),
-                },
+                payload=SendMessagePayload(
+                    message_id=f"user-{command_id}",
+                    content=content,
+                    attachments=tuple(attachment_references),
+                    execution_preference=turn_policy.execution_preference,
+                    approval_mode=turn_policy.approval_mode,
+                    force_collaboration=bool(payload.get("force_collaboration", False)),
+                ),
             )
         elif command_type == "steer_runtime_request":
             source = dict(command.get("payload") or {})
@@ -229,10 +236,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=queued.session_id,
-                payload={
-                    "kind": "steer_runtime_request",
-                    "queued_command_id": queued.command_id,
-                },
+                payload=SteerRuntimeRequestPayload(queued_command_id=queued.command_id),
             )
         elif command_type == "cancel_runtime_request":
             source = dict(command.get("payload") or {})
@@ -240,20 +244,18 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             current = _runtime_cancel_target_or_none(backend, principal_id, command)
             if current is not None:
                 session_id = current.request.session_id
-                payload = {
-                    "kind": "cancel_runtime_request",
-                    "runtime_instance_id": current.runtime_instance_id,
-                    "request_id": current.request.request_id,
-                    "reason": reason,
-                }
+                control_payload = CancelRuntimeRequestPayload(
+                    runtime_instance_id=current.runtime_instance_id,
+                    request_id=current.request.request_id,
+                    reason=reason,
+                )
             else:
                 target = _active_pre_runtime_command(backend, principal_id, command)
                 session_id = target.session_id
-                payload = {
-                    "kind": "cancel_command_request",
-                    "target_command_id": target.command_id,
-                    "reason": reason,
-                }
+                control_payload = CancelCommandRequestPayload(
+                    target_command_id=target.command_id,
+                    reason=reason,
+                )
             envelope = CommandEnvelope(
                 protocol_version=RuntimeProtocolDescriptor(
                     build_revision=backend.config.build_revision
@@ -262,7 +264,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=session_id,
-                payload=payload,
+                payload=control_payload,
             )
         elif command_type == "resume_interrupt":
             current = _active_runtime(backend, principal_id, command)
@@ -280,11 +282,10 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=current.request.session_id,
-                payload={
-                    "kind": "resume_interrupt",
-                    "runtime_instance_id": current.runtime_instance_id,
-                    "request_id": current.request.request_id,
-                    "interrupt_id": _interrupt_id(
+                payload=ResumeInterruptPayload(
+                    runtime_instance_id=current.runtime_instance_id,
+                    request_id=current.request.request_id,
+                    interrupt_id=_interrupt_id(
                         backend,
                         current.runtime_instance_id,
                         requested_interrupt_id=_required_text(
@@ -292,9 +293,9 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                             "interrupt_id",
                         ),
                     ),
-                    "decision": decision,
-                    **({"response": response} if decision in {"answer", "revise"} else {}),
-                },
+                    decision=cast(Literal["approve", "deny", "trust_tool", "revise", "answer"], decision),
+                    response=response if decision in {"answer", "revise"} else None,
+                ),
             )
         else:
             raise HTTPException(status_code=410, detail=f"frontend command was removed: {command_type}")
@@ -448,62 +449,26 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         backend.application.stores.conversations.create_principal(principal_id)
         timezone = _required_text(request.headers.get("X-Combo-Timezone"), "timezone header")
         locale = normalize_runtime_locale(request.headers.get("X-Combo-Locale"))
-        current = _policy_or_none(backend, principal_id)
-        if current is not None and payload.expected_revision != current.revision:
-            raise HTTPException(status_code=409, detail="runtime policy revision conflict")
-        if current is None and payload.expected_revision not in {None, 0}:
-            raise HTTPException(status_code=409, detail="runtime policy revision conflict")
-        approval_mode = payload.approval_mode or (current.approval_mode if current else "ask")
-        if approval_mode not in {"auto", "ask", "always_approval"}:
-            raise HTTPException(status_code=422, detail="unsupported approval_mode")
-        execution_preference = payload.execution_preference or (current.execution_preference if current else "react")
-        if execution_preference not in {"react", "plan_and_execute"}:
-            raise HTTPException(status_code=422, detail="unsupported execution_preference")
-        now = utc_now_text()
-        policy = UserRuntimePolicy(
-            principal_id=principal_id,
-            policy_id=current.policy_id if current else uuid4().hex,
-            revision=current.revision + 1 if current else 1,
-            execution_preference=execution_preference,
-            approval_mode=approval_mode,
-            model_profile_id=payload.model_profile_id if "model_profile_id" in payload.model_fields_set else current.model_profile_id if current else None,
-            reasoning_intensity=(
-                payload.reasoning_intensity
-                if payload.reasoning_intensity is not None
-                else current.reasoning_intensity if current else DEFAULT_REASONING_INTENSITY
-            ),
-            request_timeout_seconds=payload.request_timeout_seconds if payload.request_timeout_seconds is not None else current.request_timeout_seconds if current else 300,
-            builtin_tool_timeout_seconds=payload.builtin_tool_timeout_seconds if payload.builtin_tool_timeout_seconds is not None else current.builtin_tool_timeout_seconds if current else 300,
-            browser_operation_timeout_ms=payload.browser_operation_timeout_ms if payload.browser_operation_timeout_ms is not None else current.browser_operation_timeout_ms if current else 30_000,
-            browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms if payload.browser_navigation_timeout_ms is not None else current.browser_navigation_timeout_ms if current else 45_000,
-            max_model_attempts=(payload.max_retries + 1) if payload.max_retries is not None else current.max_model_attempts if current else 6,
-            max_parallel_temporary_agents=payload.max_parallel_sub_agents if payload.max_parallel_sub_agents is not None else current.max_parallel_temporary_agents if current else 5,
-            context_compression_detail=(
-                payload.context_compression_detail
-                if payload.context_compression_detail is not None
-                else current.context_compression_detail if current else "standard"
-            ),
-            context_compression_keep_recent_messages=(
-                payload.context_compression_keep_recent_messages
-                if payload.context_compression_keep_recent_messages is not None
-                else current.context_compression_keep_recent_messages if current else 12
-            ),
-            memory_auto_recall_enabled=payload.memory_auto_recall_enabled if payload.memory_auto_recall_enabled is not None else current.memory_auto_recall_enabled if current else True,
-            memory_agent_write_enabled=payload.memory_agent_write_enabled if payload.memory_agent_write_enabled is not None else current.memory_agent_write_enabled if current else True,
-            memory_max_injected_items=payload.memory_max_injected_items if payload.memory_max_injected_items is not None else current.memory_max_injected_items if current else 8,
-            memory_max_injected_tokens=payload.memory_max_injected_tokens if payload.memory_max_injected_tokens is not None else current.memory_max_injected_tokens if current else 1200,
-            computer_use_enabled=payload.computer_use_enabled if payload.computer_use_enabled is not None else current.computer_use_enabled if current else False,
-            max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
-            delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
-            locale=locale,
-            timezone=timezone,
-            updated_at=now,
-        )
-        saved = (
-            backend.application.stores.runtime_policies.create(policy, created_at=now)
-            if current is None
-            else backend.application.stores.runtime_policies.replace(policy, expected_revision=current.revision)
-        )
+        changes = payload.model_dump(exclude_none=True, exclude={
+            "expected_revision", "max_retries", "max_parallel_sub_agents",
+        })
+        if "model_profile_id" in payload.model_fields_set:
+            changes["model_profile_id"] = payload.model_profile_id
+        if payload.max_retries is not None:
+            changes["max_model_attempts"] = payload.max_retries + 1
+        if payload.max_parallel_sub_agents is not None:
+            changes["max_parallel_temporary_agents"] = payload.max_parallel_sub_agents
+        changes.update(locale=locale, timezone=timezone)
+        try:
+            saved = backend.application.stores.runtime_policies.write(
+                principal_id=principal_id,
+                expected_revision=payload.expected_revision,
+                changes=changes,
+            )
+        except RuntimeError as exc:
+            if str(exc) == "runtime_policy_revision_conflict":
+                raise HTTPException(status_code=409, detail="runtime policy revision conflict") from exc
+            raise
         return _runtime_preferences_view(saved)
 
     @router.patch("/api/background-tasks/settings")
@@ -515,28 +480,20 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         timezone = _required_text(request.headers.get("X-Combo-Timezone"), "timezone header")
         locale = normalize_runtime_locale(request.headers.get("X-Combo-Locale"))
         current = _policy_or_none(backend, principal_id)
-        if current is None:
-            policy = UserRuntimePolicy(
+        try:
+            saved = backend.application.stores.runtime_policies.write(
                 principal_id=principal_id,
-                policy_id=uuid4().hex,
-                model_profile_id=None,
-                max_parallel_temporary_agents=payload.max_parallel_sub_agents,
-                locale=locale,
-                timezone=timezone,
-            )
-            saved = backend.application.stores.runtime_policies.create(policy, created_at=policy.updated_at)
-        else:
-            if payload.revision is not None and payload.revision != current.revision:
-                raise HTTPException(status_code=409, detail="runtime policy revision conflict")
-            saved = backend.application.stores.runtime_policies.replace(
-                current.model_copy(update={
-                    "revision": current.revision + 1,
+                expected_revision=payload.revision if payload.revision is not None else current.revision if current else None,
+                changes={
                     "max_parallel_temporary_agents": payload.max_parallel_sub_agents,
                     "locale": locale,
-                    "updated_at": utc_now_text(),
-                }),
-                expected_revision=current.revision,
+                    **({"timezone": timezone} if current is None else {}),
+                },
             )
+        except RuntimeError as exc:
+            if str(exc) == "runtime_policy_revision_conflict":
+                raise HTTPException(status_code=409, detail="runtime policy revision conflict") from exc
+            raise
         return {
             "settings": {
                 "max_parallel_sub_agents": saved.max_parallel_temporary_agents,
@@ -698,35 +655,23 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         payload: WorkspaceCreateRequest,
     ) -> dict[str, Any]:
         principal_id = _principal(request)
-        workspace_id = uuid4().hex
         title = str(payload.title or "新工作区").strip() or "新工作区"
         if payload.root_kind == "linked":
-            source_path = Path(str(payload.workdir_root or "")).expanduser().resolve()
-            if not source_path.is_dir():
-                raise HTTPException(status_code=422, detail="linked workspace directory does not exist")
-            backend.application.stores.conversations.create_linked_workspace(
-                workspace_id=workspace_id,
+            try:
+                workspace = backend.conversation_lifecycle.create_linked_workspace(
+                    principal_id=principal_id,
+                    source_path=str(payload.workdir_root or ""),
+                    title=title,
+                    mode=payload.mode,
+                )
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        else:
+            workspace = backend.conversation_lifecycle.create_managed_workspace(
                 principal_id=principal_id,
-                source_path=str(source_path),
                 title=title,
                 mode=payload.mode,
             )
-            workspace = backend.application.stores.conversations.require_workspace(workspace_id)
-            return {"workspace": _workspace_project_view(backend, workspace)}
-        workspace_path = Path(backend.config.workspace_root) / workspace_id
-        workspace_path.mkdir(parents=True, exist_ok=False)
-        try:
-            backend.application.stores.conversations.create_managed_workspace(
-                workspace_id=workspace_id,
-                principal_id=principal_id,
-                managed_path=str(workspace_path),
-                title=title,
-                mode=payload.mode,
-            )
-        except Exception:
-            workspace_path.rmdir()
-            raise
-        workspace = backend.application.stores.conversations.require_workspace(workspace_id)
         return {"workspace": _workspace_project_view(backend, workspace)}
 
     @router.patch("/api/workspace/projects/{workspace_id}")
@@ -748,6 +693,25 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"workspace": _workspace_project_view(backend, workspace)}
+
+    @router.delete("/api/workspace/projects/{workspace_id}")
+    async def delete_workspace_project(workspace_id: str, request: Request) -> dict[str, Any]:
+        try:
+            result = await backend.conversation_lifecycle.delete_workspace(
+                principal_id=_principal(request), workspace_id=workspace_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RuntimeError, TimeoutError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        principal_id = _principal(request)
+        return {"event": _event("agent_package_session_deleted", {
+            "package_id": SYSTEM_CHAT_PACKAGE_ID,
+            "workspace_id": workspace_id,
+            "deleted_session_ids": list(result.session_ids),
+            "deleted_memory_count": result.deleted_memory_count,
+            "sessions": _session_views(backend, principal_id),
+        })}
 
     @router.get("/api/workspace/directory-roots")
     async def workspace_directory_roots(request: Request) -> dict[str, Any]:
@@ -941,29 +905,48 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     async def memory_query(
         request: Request,
         query: str = "",
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=8, ge=1),
+        scope: Literal["all", "user", "workspace"] = "all",
         workspace_id: str | None = None,
-        limit: int = 8,
     ) -> dict[str, Any]:
         principal_id = _principal(request)
-        resolved_workspace_id = _memory_workspace_id(backend, principal_id, workspace_id)
+        if scope == "workspace":
+            if not workspace_id:
+                raise HTTPException(status_code=409, detail="active workspace is required")
+            try:
+                workspace = backend.application.stores.conversations.require_workspace(workspace_id)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail="workspace not found") from exc
+            if workspace.principal_id != principal_id or workspace.status != "active":
+                raise HTTPException(status_code=404, detail="workspace not found")
+        memory_scope = None if scope == "all" else scope
+        include_all_workspaces = scope == "all"
         store = backend.application.stores.memories
         if query.strip():
             results = store.search(
                 principal_id=principal_id,
-                workspace_id=resolved_workspace_id,
+                workspace_id=workspace_id or "",
                 query=query,
-                limit=max(1, limit),
-            )
+                limit=offset + limit + 1,
+                scope=memory_scope,
+                all_workspaces=include_all_workspaces,
+            )[offset:]
         else:
-            from combo.dynamic_runtime.memory_store import MemorySearchResult
+            from combo.context_system.memory_results import MemorySearchResult
             results = tuple(
                 MemorySearchResult(revision=item, score=1.0)
                 for item in store.list_active(
                     principal_id=principal_id,
-                    workspace_id=resolved_workspace_id,
-                    limit=max(1, limit),
+                    workspace_id=workspace_id or "",
+                    scope=memory_scope,
+                    all_workspaces=include_all_workspaces,
+                    limit=limit + 1,
+                    offset=offset,
                 )
             )
+        next_offset = offset + limit if len(results) > limit else None
+        results = results[:limit]
         items = [
             {
                 "memory_id": item.revision.memory_id,
@@ -980,9 +963,10 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         ]
         return {
             "package_id": None,
-            "namespace": ["combined", resolved_workspace_id],
+            "namespace": ["all", principal_id],
             "namespaces": [],
             "query": query,
+            "next_offset": next_offset,
             "items": items,
             "token_estimate": sum(max(1, len(item["content"]) // 4) for item in items),
             "report": {},
@@ -1069,6 +1053,8 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             raise HTTPException(status_code=422, detail="invalid knowledge source metadata") from exc
         documents: list[dict[str, str]] = []
         for upload in form.getlist("files"):
+            if not isinstance(upload, StarletteUploadFile):
+                raise HTTPException(status_code=422, detail="knowledge upload files must be file parts")
             raw = await upload.read()
             try:
                 content = raw.decode("utf-8")
@@ -1322,30 +1308,21 @@ def _ensure_conversation(
         if identity.principal_id != principal_id:
             raise HTTPException(status_code=404, detail="conversation not found")
         return session_id
-    session_id = uuid4().hex
     workspace_id = str(requested_workspace_id or "").strip()
     if workspace_id:
-        workspace = backend.application.stores.conversations.require_workspace(workspace_id)
-        if workspace.principal_id != principal_id or workspace.status != "active":
-            raise HTTPException(status_code=404, detail="workspace not found")
-        backend.application.stores.conversations.create_conversation(
-            session_id=session_id,
-            workspace_id=workspace_id,
-            principal_id=principal_id,
-            title="新对话",
-        )
-        return session_id
-    workspace_id = uuid4().hex
-    workspace_path = Path(backend.config.workspace_root) / workspace_id
-    workspace_path.mkdir(parents=True, exist_ok=False)
-    backend.application.stores.conversations.create_managed_conversation(
-        session_id=session_id,
-        workspace_id=workspace_id,
+        try:
+            identity = backend.conversation_lifecycle.create_in_workspace(
+                principal_id=principal_id,
+                workspace_id=workspace_id,
+                title="新对话",
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="workspace not found") from exc
+        return identity.session_id
+    return backend.conversation_lifecycle.create_managed(
         principal_id=principal_id,
-        managed_path=str(workspace_path),
         title="新对话",
-    )
-    return session_id
+    ).session_id
 
 
 def _synchronize_policy(
@@ -1373,63 +1350,37 @@ def _synchronize_policy(
     requested_approval_mode = str(config.get("approval_mode") or "").strip()
     if requested_approval_mode and requested_approval_mode not in {"auto", "ask", "always_approval"}:
         raise HTTPException(status_code=422, detail="unsupported approval_mode")
-    now = utc_now_text()
     requested_execution_preference = str(command_payload.get("execution_preference") or "").strip()
     if requested_execution_preference and requested_execution_preference not in {"react", "plan_and_execute"}:
         raise HTTPException(status_code=422, detail="unsupported execution_preference")
-    policy = UserRuntimePolicy(
-        principal_id=principal_id,
-        policy_id=current.policy_id if current is not None else uuid4().hex,
-        revision=current.revision + 1 if current is not None else 1,
-        execution_preference=(requested_execution_preference or (current.execution_preference if current is not None else "react")),
-        approval_mode=(
-            requested_approval_mode
-            or (current.approval_mode if current is not None else "ask")
-        ),
-        model_profile_id=profile_id or current.model_profile_id,
-        reasoning_intensity=(
-            int(config["reasoning_intensity"])
-            if config.get("reasoning_intensity") is not None
-            else current.reasoning_intensity if current is not None else DEFAULT_REASONING_INTENSITY
-        ),
-        request_timeout_seconds=int(runtime_request.get("timeout_seconds") or (current.request_timeout_seconds if current else 300)),
-        builtin_tool_timeout_seconds=current.builtin_tool_timeout_seconds if current else 300,
-        browser_operation_timeout_ms=current.browser_operation_timeout_ms if current else 30_000,
-        browser_navigation_timeout_ms=current.browser_navigation_timeout_ms if current else 45_000,
-        max_model_attempts=(
-            int(runtime_request["max_retries"]) + 1
-            if runtime_request.get("max_retries") is not None
-            else current.max_model_attempts if current else 2
-        ),
-        max_parallel_temporary_agents=(
-            int(config["max_parallel_sub_agents"])
-            if config.get("max_parallel_sub_agents") is not None
-            else current.max_parallel_temporary_agents if current else 4
-        ),
-        context_compression_detail=(
-            current.context_compression_detail if current else "standard"
-        ),
-        context_compression_keep_recent_messages=(
-            current.context_compression_keep_recent_messages if current else 12
-        ),
-        memory_auto_recall_enabled=current.memory_auto_recall_enabled if current else True,
-        memory_agent_write_enabled=current.memory_agent_write_enabled if current else True,
-        memory_max_injected_items=current.memory_max_injected_items if current else 8,
-        memory_max_injected_tokens=current.memory_max_injected_tokens if current else 1200,
-        computer_use_enabled=current.computer_use_enabled if current else False,
-        max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
-        delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
-        locale=normalize_runtime_locale(locale),
-        timezone=timezone,
-        updated_at=now,
-    )
-    if current is None:
-        store.create(policy, created_at=now)
-    elif policy.model_dump(exclude={"revision", "updated_at"}) != current.model_dump(exclude={"revision", "updated_at"}):
-        store.replace(policy, expected_revision=current.revision)
-    else:
-        policy = current
-    return policy
+    changes: dict[str, object] = {
+        "locale": normalize_runtime_locale(locale),
+        "timezone": timezone,
+    }
+    if profile_id:
+        changes["model_profile_id"] = profile_id
+    if requested_approval_mode:
+        changes["approval_mode"] = requested_approval_mode
+    if requested_execution_preference:
+        changes["execution_preference"] = requested_execution_preference
+    if config.get("reasoning_intensity") is not None:
+        changes["reasoning_intensity"] = int(config["reasoning_intensity"])
+    if runtime_request.get("timeout_seconds") is not None:
+        changes["request_timeout_seconds"] = int(runtime_request["timeout_seconds"])
+    if runtime_request.get("max_retries") is not None:
+        changes["max_model_attempts"] = int(runtime_request["max_retries"]) + 1
+    if config.get("max_parallel_sub_agents") is not None:
+        changes["max_parallel_temporary_agents"] = int(config["max_parallel_sub_agents"])
+    try:
+        return store.write(
+            principal_id=principal_id,
+            expected_revision=current.revision if current is not None else None,
+            changes=changes,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "runtime_policy_revision_conflict":
+            raise HTTPException(status_code=409, detail="runtime policy revision conflict") from exc
+        raise
 
 
 def _active_runtime_or_none(backend: Any, principal_id: str, command: dict[str, Any]):
@@ -1970,7 +1921,8 @@ def _frontend_message_part(
             "updatedAt": value.get("completed_at"),
         }
     if kind == "attachment":
-        reference = value.get("attachment") if isinstance(value.get("attachment"), dict) else {}
+        raw_reference = value.get("attachment")
+        reference = raw_reference if isinstance(raw_reference, dict) else {}
         attachment_id = str(reference.get("attachment_id") or "").strip()
         attachment = {
             "kind": "file",
@@ -2307,7 +2259,7 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "result_summary": _task_result_summary(result),
         "result": {"value": result} if result is not None else None,
         "error": _delegated_error_view(error),
-        "pending_interaction": _pending_task_interaction(latest, task_name=task.agent_name),
+        "pending_interaction": _pending_task_interaction(latest, task_name=task.agent_name or task.task_id),
         **_task_worktree_view(backend, task),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
@@ -2403,7 +2355,8 @@ def _runtime_activity_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _task_activity_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     if event_type == "activity":
         source_event_id = str(payload.get("source_event_id") or "runtime_activity_updated")
-        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        raw_details = payload.get("details")
+        details = raw_details if isinstance(raw_details, dict) else {}
         if str(payload.get("source") or "") == "tool":
             tool_call_id = str(details.get("tool_call_id") or "").strip()
             if not tool_call_id:
@@ -2466,13 +2419,16 @@ def _latest_runtime_activity(events: list[Any]) -> dict[str, str]:
 def _pending_task_interaction(event: Any, *, task_name: str) -> dict[str, Any] | None:
     if event is None or event.event_type not in {"approval_required", "question"}:
         return None
-    details = event.payload.get("details") if isinstance(event.payload.get("details"), dict) else {}
-    interrupts = details.get("interrupts") if isinstance(details.get("interrupts"), list) else []
+    raw_details = event.payload.get("details")
+    details = raw_details if isinstance(raw_details, dict) else {}
+    raw_interrupts = details.get("interrupts")
+    interrupts = raw_interrupts if isinstance(raw_interrupts, list) else []
     interrupt = interrupts[0] if interrupts and isinstance(interrupts[0], dict) else {}
     interaction_id = str(interrupt.get("interrupt_id") or interrupt.get("id") or "").strip()
     if not interaction_id:
         return None
-    requests = interrupt.get("requests") if isinstance(interrupt.get("requests"), list) else []
+    raw_requests = interrupt.get("requests")
+    requests = raw_requests if isinstance(raw_requests, list) else []
     return {
         "interaction_id": interaction_id,
         "kind": "tool_approval" if event.event_type == "approval_required" else "ask_user",
@@ -2512,7 +2468,8 @@ def _task_result_summary(value: Any) -> str:
 def _delegated_error_view(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    details = value.get("details") if isinstance(value.get("details"), dict) else {}
+    raw_details = value.get("details")
+    details = raw_details if isinstance(raw_details, dict) else {}
     message = str(
         details.get("message")
         or details.get("reason")
@@ -2544,16 +2501,16 @@ def _enqueue_runtime_control(
     payload: dict[str, Any],
 ) -> None:
     command_id = uuid4().hex
-    envelope = CommandEnvelope(
-        protocol_version=RuntimeProtocolDescriptor(
+    envelope = CommandEnvelope.model_validate({
+        "protocol_version": RuntimeProtocolDescriptor(
             build_revision=backend.config.build_revision
         ).protocol_version,
-        command_id=command_id,
-        client_instance_id="background-task-api",
-        principal_id=principal_id,
-        session_id=session_id,
-        payload=payload,
-    )
+        "command_id": command_id,
+        "client_instance_id": "background-task-api",
+        "principal_id": principal_id,
+        "session_id": session_id,
+        "payload": payload,
+    })
     backend.application.stores.commands.accept(
         envelope,
         CommandReceipt(
@@ -2628,23 +2585,6 @@ def _workspace_root(
     except (LookupError, PermissionError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     return Path(root)
-
-
-def _memory_workspace_id(
-    backend: Any,
-    principal_id: str,
-    workspace_id: str | None,
-) -> str:
-    value = str(workspace_id or "").strip()
-    if value:
-        workspace = backend.application.stores.conversations.require_workspace(value)
-        if workspace.principal_id != principal_id or workspace.status != "active":
-            raise HTTPException(status_code=404, detail="workspace not found")
-        return value
-    conversations = backend.application.stores.conversations.list_for_principal(principal_id)
-    if not conversations:
-        raise HTTPException(status_code=409, detail="active workspace is required")
-    return conversations[0].workspace_id
 
 
 def _workspace_path(root: Path, relative_path: str) -> Path:
@@ -2738,12 +2678,12 @@ def _knowledge_source_payload(value: Any) -> dict[str, Any]:
 def _attachment_references(
     principal_id: str,
     value: Any,
-) -> tuple[list[dict[str, Any]], list[StagedAttachment]]:
+) -> tuple[list[AttachmentRevisionRef], list[StagedAttachment]]:
     if value is None:
         return [], []
     if not isinstance(value, list):
         raise HTTPException(status_code=422, detail="attachments must be an array")
-    references: list[dict[str, Any]] = []
+    references: list[AttachmentRevisionRef] = []
     staged_attachments: list[StagedAttachment] = []
     store = attachment_upload_store()
     for index, raw in enumerate(value):
@@ -2778,11 +2718,11 @@ def _attachment_references(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except AttachmentUploadError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        references.append({
-            "attachment_id": staged.attachment_id,
-            "revision": 1,
-            "content_digest": staged.content_digest,
-        })
+        references.append(AttachmentRevisionRef(
+            attachment_id=staged.attachment_id,
+            revision=1,
+            content_digest=staged.content_digest,
+        ))
         staged_attachments.append(staged)
     return references, staged_attachments
 

@@ -42,4 +42,14 @@ if TYPE_CHECKING:
     )
 
 
-__all__ = sorted(_EXPORT_MODULES)
+__all__ = [
+    "ModelToolView",
+    "ToolCompiler",
+    "ToolEventPayload",
+    "ToolExecutionGateway",
+    "ToolObservation",
+    "ToolRiskEvaluatorConfig",
+    "ToolRiskResult",
+    "ToolSpec",
+    "compile_json_schema",
+]

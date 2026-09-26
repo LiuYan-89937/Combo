@@ -67,7 +67,7 @@ class ComputerHostClient:
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
         # The caller owns the I/O lock. Only start() may open a connection.
         with self._state_lock:
-            if self._socket is None or self._state == "closed":
+            if self._socket is None or self._reader is None or self._state == "closed":
                 raise ConnectionError(
                     "native CU session is closed; request was not sent"
                 )

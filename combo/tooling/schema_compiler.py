@@ -96,10 +96,10 @@ def _pydantic_model_from_schema(schema: dict[str, Any], model_name: str) -> type
 
 def _annotation_for_schema(schema: dict[str, Any], model_name: str) -> Any:
     if "const" in schema:
-        return Literal.__getitem__((schema["const"],))
+        return _parameterized_type(Literal, (schema["const"],))
     enum_values = schema.get("enum")
     if isinstance(enum_values, list) and enum_values:
-        return Literal.__getitem__(tuple(enum_values))
+        return _parameterized_type(Literal, tuple(enum_values))
     if "anyOf" in schema or "oneOf" in schema:
         options = schema.get("anyOf") or schema.get("oneOf") or []
         annotations = [
@@ -111,7 +111,7 @@ def _annotation_for_schema(schema: dict[str, Any], model_name: str) -> Any:
             return Any
         if len(annotations) == 1:
             return annotations[0]
-        return Union.__getitem__(tuple(annotations))
+        return _parameterized_type(Union, tuple(annotations))
     schema_type = schema.get("type")
     if isinstance(schema_type, list):
         non_null = [item for item in schema_type if item != "null"]
@@ -136,6 +136,11 @@ def _annotation_for_schema(schema: dict[str, Any], model_name: str) -> Any:
             return _pydantic_model_from_schema(schema, model_name)
         return dict[str, Any]
     return Any
+
+
+def _parameterized_type(form: Any, arguments: tuple[Any, ...]) -> Any:
+    """Construct a runtime annotation for Pydantic's dynamic model builder."""
+    return form[arguments]
 
 
 def _relevant_errors(error: Any) -> list[Any]:
@@ -176,8 +181,10 @@ def _format_error(error: Any) -> str:
             return f"{_location([*path, missing[0]])}: required property is missing"
     if error.validator == "additionalProperties" and isinstance(error.instance, dict):
         schema = error.schema if isinstance(error.schema, dict) else {}
-        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
-        patterns = schema.get("patternProperties") or {}
+        raw_properties = schema.get("properties")
+        properties = raw_properties if isinstance(raw_properties, dict) else {}
+        raw_patterns = schema.get("patternProperties")
+        patterns = raw_patterns if isinstance(raw_patterns, dict) else {}
         unexpected = sorted(
             str(name) for name in set(error.instance) - set(properties)
             if not any(re.search(pattern, str(name)) for pattern in patterns)

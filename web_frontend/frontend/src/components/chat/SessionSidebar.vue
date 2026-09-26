@@ -40,6 +40,7 @@
       :empty-description="t('sessions.empty')"
       @select="handleSelectSession"
       @delete="confirmDeleteSession"
+      @delete-workspace="confirmDeleteWorkspace"
     />
 
   </div>
@@ -56,6 +57,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
+import { useWorkspaceDeletion } from '@/composables/conversation/useWorkspaceDeletion'
 import type { AgentSessionView } from '@/stores/agent'
 
 const props = withDefaults(
@@ -79,6 +81,7 @@ const { openAgentSession } = useAgentSessionNavigation()
 const { t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
+const { confirmDeleteWorkspace } = useWorkspaceDeletion(locked => emit('interactionLock', locked))
 
 const panelTitle = computed(() => props.title || t('sessions.main'))
 

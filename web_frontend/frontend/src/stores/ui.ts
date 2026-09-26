@@ -13,7 +13,7 @@ import {
 } from '@/i18n'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
-export type ConversationDockPanel = 'workspace' | 'memory' | 'sessions' | 'tasks'
+export type ConversationDockPanel = 'workspace' | 'memory' | 'sessions' | 'outline' | 'tasks'
 
 const STORAGE_KEYS = {
   locale: localeStorageKey,

@@ -22,8 +22,8 @@ from combo.runtime_kernel.model_operations.tool_calls import (
     tool_calls_from_response,
 )
 from combo.runtime_protocol import RuntimeInstance
+from combo.runtime_protocol.interruption import RuntimeToolExecutionCancelled
 from combo.tooling.execution_context import (
-    RuntimeToolExecutionCancelled,
     execute_with_runtime_cancellation,
     register_runtime_tool_cancellation,
     runtime_terminal_cancellation_requested,

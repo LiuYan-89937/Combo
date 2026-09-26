@@ -35,7 +35,7 @@ class ImageGenerationRuntime:
         if resolved is None:
             raise RuntimeError("default image generation model is unavailable")
         operation = str(arguments.get("operation") or "text_to_image")
-        if operation not in {"text_to_image", "image_to_image", "edit"}:
+        if operation != "text_to_image" and operation != "image_to_image" and operation != "edit":
             raise ValueError("operation must be text_to_image, image_to_image, or edit")
         input_images = tuple(
             image_input_from_path(self._resolve_workspace_path(value))

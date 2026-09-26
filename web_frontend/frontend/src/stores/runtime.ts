@@ -5,6 +5,8 @@
  * 参考 CLI 的 runtimeStore.ts
  */
 import { isPendingDispatch, type RequestDispatchState } from './runtime/requestDispatch'
+import { rememberRuntimeEventIds } from './runtime/eventIdentity'
+import { applyPresentationEvent } from './runtime/presentationEvents'
 import { defineStore } from 'pinia'
 import type {
   RuntimeFrontendEvent,
@@ -28,11 +30,6 @@ import {
 } from './runtime/conversationMutations'
 import {
   applyContextActivityEvent,
-  applyKnowledgeActivityEvent,
-  applyMemoryActivityEvent,
-  applyRuntimeActivityEvent,
-  applySchedulerActivityEvent,
-  recordDebugEvent,
   recordTimelineEvent,
 } from './runtime/activityMutations'
 import {
@@ -47,26 +44,6 @@ import {
   shouldRenderInterruptMessage,
 } from './runtime/eventUtils'
 import {
-  applyNodeCompleted,
-  applyNodeFailed,
-  applyNodeProgress,
-  applyNodeStarted,
-  applyStageCompleted,
-  applyStageFailed,
-  applyStageStarted,
-} from './runtime/graphMutations'
-import {
-  applyModelCallStarted,
-  applyModelMessageCompleted,
-  applyModelReasoningCompleted,
-  applyModelReasoningDelta,
-  applyModelStreamDelta,
-} from './runtime/modelMutations'
-import {
-  applyMessageCompleted,
-  applyMessagePartCompleted,
-  applyMessagePartDelta,
-  applyMessageStarted,
   reconcileAssistantDialogueInterrupt,
   reconcileCompletedAssistantSnapshot,
 } from './runtime/messageMutations'
@@ -85,17 +62,18 @@ import {
   prependSessionHistory,
 } from './runtime/sessionSnapshots'
 import {
-  sessionDeletionFromPayload,
-  sessionDeletionIncludes,
-} from './runtime/sessionDeletion'
+  applyAgentPackageDeleted,
+  applyAgentPackageListed,
+  applyAgentPackageSelected,
+  applyAgentPackageSessionDeleted,
+  applyAgentPackageSessionsListed,
+} from './runtime/agentPackageMutations'
 import {
   attachmentPart,
   errorPart,
   textPart,
 } from './runtime/messageParts'
 import {
-  applyExtensionsEvent,
-  applyWorkspaceEvent,
   markSchedulerRunNoticeRead,
   dismissSchedulerRunNoticeFromConversation,
 } from './runtime/resourceMutations'
@@ -103,7 +81,6 @@ import {
   applyToolApprovalRequested,
   applyToolApprovalResolved,
   finalizeToolActivitiesForRequest,
-  applyToolLifecycleEvent,
 } from './runtime/toolMutations'
 import { finalizeComputerUseForRequest } from './runtime/computerUseMutations'
 import {
@@ -117,9 +94,6 @@ import {
   isStandaloneAgentSession,
 } from '@/utils/sessionPresentation'
 import { isRuntimeCancellation } from '@/utils/runtimeCancellation'
-
-// 事件去重集合
-const processedEventIds = new Set<string>()
 
 export const useRuntimeStore = defineStore('runtime', {
   state: (): RuntimeViewState => ({
@@ -275,14 +249,7 @@ export const useRuntimeStore = defineStore('runtime', {
      * 处理事件 - 主 reducer
      */
     handleEvent(event: RuntimeFrontendEvent) {
-      // 1. 事件去重
-      if (processedEventIds.has(event.event_id)) {
-        console.debug('Duplicate event ignored:', event.event_id)
-        return
-      }
-      processedEventIds.add(event.event_id)
-
-      // 2. 协议版本验证
+      // 1. 协议版本验证
       if (event.protocol_version !== this.protocolVersion) {
         console.error('Protocol version mismatch:', event.protocol_version)
         return
@@ -331,6 +298,7 @@ export const useRuntimeStore = defineStore('runtime', {
      */
     _dispatchEvent(event: RuntimeFrontendEvent) {
       const { event_type: type, payload } = event
+      if (applyPresentationEvent(this, event)) return
 
       // Runtime lifecycle
       if (type === 'runtime_ready') {
@@ -363,36 +331,20 @@ export const useRuntimeStore = defineStore('runtime', {
 
       // Agent packages
       else if (type === 'agent_packages_listed') {
-        this.agentPackages = payload?.packages || []
+        applyAgentPackageListed(this, event)
       } else if (type === 'agent_package_selected') {
         if (!this.ownsAgentPackageSelection(event)) return
-        this.currentMode = event.mode || this.currentMode
-        this.selectedAgentPackage = payload?.package || null
-        this.agentSessions = payload?.sessions
-          ? payload.sessions.filter(isStandaloneAgentSession)
-          : this.agentSessions
+        applyAgentPackageSelected(this, event)
       } else if (type === 'agent_package_deleted') {
-        const deletedPackageId = payload?.package_id
-        this.agentPackages = payload?.packages || this.agentPackages.filter((pkg) => pkg.package_id !== deletedPackageId)
-        if (this.selectedAgentPackage?.package_id === deletedPackageId) {
-          this.selectedAgentPackage = null
-        }
+        applyAgentPackageDeleted(this, event)
       } else if (type === 'agent_package_sessions_listed') {
-        this.agentSessions = (payload?.sessions || []).filter(isStandaloneAgentSession)
+        applyAgentPackageSessionsListed(this, event)
       } else if (type === 'agent_package_session_loaded') {
         this._restoreAgentPackageSession(payload?.session, payload?.package_id)
       } else if (type === 'agent_package_session_deleted') {
-        const deletion = sessionDeletionFromPayload(payload)
-        const deletedSessionIds = new Set(deletion.sessionIds)
-        const deletedCurrentSession = sessionDeletionIncludes(deletion, this.activeAgentSessionId)
-        this.agentSessions = payload?.sessions
-          ? payload.sessions.filter(isStandaloneAgentSession)
-          : this.agentSessions.filter((session: any) => !deletedSessionIds.has(session.session_id))
-        if (deletedCurrentSession) {
-          const packageId = String(payload?.package_id || this.selectedAgentPackage?.package_id || '').trim() || null
-          this.showEmptyAgentPackageSession(packageId)
-        }
-        this._deleteConversationScopesForSessions(deletion.sessionIds)
+        const change = applyAgentPackageSessionDeleted(this, event)
+        if (change.deletedCurrentSession) this.showEmptyAgentPackageSession(change.emptyPackageId)
+        this._deleteConversationScopesForSessions(change.sessionIds)
       }
 
       // Run lifecycle
@@ -413,115 +365,19 @@ export const useRuntimeStore = defineStore('runtime', {
         this._handleInterruptRequested(event)
       }
 
-      // Stage lifecycle
-      else if (type === 'stage_started') {
-        this._handleStageStarted(event)
-      } else if (type === 'stage_completed') {
-        this._handleStageCompleted(event)
-      } else if (type === 'stage_failed') {
-        this._handleStageFailed(event)
-      }
-
-      // Node lifecycle
-      else if (type === 'node_started') {
-        this._handleNodeStarted(event)
-      } else if (type === 'node_progress') {
-        this._handleNodeProgress(event)
-      } else if (type === 'node_completed') {
-        this._handleNodeCompleted(event)
-      } else if (type === 'node_failed') {
-        this._handleNodeFailed(event)
-      }
-
       // Plan
       else if (type === 'plan_updated') {
         this._handlePlanUpdated(event)
-      }
-
-      // User-facing runtime activity
-      else if (type === 'runtime_activity_updated') {
-        applyRuntimeActivityEvent(this, event)
       }
 
       else if (type === 'delegated_task_terminal') {
         this._handleDelegatedTaskTerminal(event)
       }
 
-      // Message parts
-      else if (type === 'message_started') {
-        applyMessageStarted(this, event)
-      } else if (type === 'message_part_delta') {
-        applyMessagePartDelta(this, event)
-      } else if (type === 'message_part_completed') {
-        applyMessagePartCompleted(this, event)
-      } else if (type === 'message_completed') {
-        applyMessageCompleted(this, event)
-      }
-
-      // Model streams
-      else if (type === 'model_call_started') {
-        this._handleModelCallStarted(event)
-      } else if (type === 'model_reasoning_delta') {
-        this._handleModelReasoningDelta(event)
-      } else if (type === 'model_reasoning_completed') {
-        this._handleModelReasoningCompleted(event)
-      } else if (type === 'model_stream_delta') {
-        this._handleModelStreamDelta(event)
-      } else if (type === 'model_message_completed') {
-        this._handleModelMessageCompleted(event)
-      }
-
-      // Tools
-      else if (type === 'tool_call_proposed') {
-        this._handleToolCallProposed(event)
-      } else if (type === 'tool_approval_requested') {
+      else if (type === 'tool_approval_requested') {
         this._handleToolApprovalRequested(event)
       } else if (type === 'tool_approval_resolved') {
-        this._handleToolApprovalResolved(event)
-      } else if (type === 'tool_call_started') {
-        this._handleToolCallStarted(event)
-      } else if (type === 'tool_call_output_delta') {
-        this._handleToolCallStarted(event)
-      } else if (type === 'tool_call_completed') {
-        this._handleToolCallCompleted(event)
-      } else if (type === 'tool_call_cancelled') {
-        applyToolLifecycleEvent(this, event, 'cancelled')
-      } else if (type === 'tool_call_failed') {
-        this._handleToolCallFailed(event)
-      } else if (type === 'tool_contract_invalid') {
-        this._handleToolCallFailed(event)
-      } else if (type === 'tool_observation_available') {
-        this._handleToolObservation(event)
-      }
-
-      // Context
-      else if (type.startsWith('context_')) {
-        this._handleContextEvent(event)
-      }
-
-      // Memory
-      else if (type.startsWith('memory_')) {
-        this._handleMemoryEvent(event)
-      }
-
-      // Knowledge
-      else if (type.startsWith('knowledge_')) {
-        this._handleKnowledgeEvent(event)
-      }
-
-      // Workspace
-      else if (type.startsWith('workspace_')) {
-        this._handleWorkspaceEvent(event)
-      }
-
-      // Extensions
-      else if (type === 'extension_configs_listed' || type === 'extension_config_updated' || type === 'extension_config_tested' || type === 'extension_config_test_output_delta' || type === 'extension_skillhub_result') {
-        this._handleExtensionsEvent(event)
-      }
-
-      // Scheduler
-      else if (type.startsWith('scheduler_')) {
-        this._handleSchedulerEvent(event)
+        applyToolApprovalResolved(this, event)
       }
 
       // Error
@@ -529,10 +385,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this._handleError(event)
       }
 
-      // Debug patch
-      else if (type === 'debug_patch') {
-        this._recordDebugEvent(event)
-      }
     },
 
     /**
@@ -814,20 +666,19 @@ export const useRuntimeStore = defineStore('runtime', {
         this._completeActiveRequest(event, 'failed')
         return
       }
+      const failure = runtimeFailurePresentation(event, translate(currentLocale(), 'common.requestFailed'))
       this._completeActiveRequest(event, 'failed')
       finalizeToolActivitiesForRequest(
         this,
         event.request_id || this.activeRequestId || null,
         event.timestamp,
         'failed',
-        event.payload?.message || event.payload?.error || event.message || undefined,
+        failure.message,
       )
       this.runStatus = 'failed'
       const requestId = event.request_id || this.activeRequestId || null
       this.pendingInterrupt = null
       this._syncAgentSessionFromRunEvent(event)
-
-      const failure = runtimeFailurePresentation(event, translate(currentLocale(), 'common.requestFailed'))
 
       const errorItem: TranscriptItem = {
         id: event.event_id,
@@ -921,40 +772,6 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     /**
-     * Stage handlers
-     */
-    _handleStageStarted(event: RuntimeFrontendEvent) {
-      applyStageStarted(this, event)
-    },
-
-    _handleStageCompleted(event: RuntimeFrontendEvent) {
-      applyStageCompleted(this, event)
-    },
-
-    _handleStageFailed(event: RuntimeFrontendEvent) {
-      applyStageFailed(this, event)
-    },
-
-    /**
-     * Node handlers
-     */
-    _handleNodeStarted(event: RuntimeFrontendEvent) {
-      applyNodeStarted(this, event)
-    },
-
-    _handleNodeProgress(event: RuntimeFrontendEvent) {
-      applyNodeProgress(this, event)
-    },
-
-    _handleNodeCompleted(event: RuntimeFrontendEvent) {
-      applyNodeCompleted(this, event)
-    },
-
-    _handleNodeFailed(event: RuntimeFrontendEvent) {
-      applyNodeFailed(this, event)
-    },
-
-    /**
      * Plan handler
      */
     _handlePlanUpdated(event: RuntimeFrontendEvent) {
@@ -985,89 +802,12 @@ export const useRuntimeStore = defineStore('runtime', {
       this._saveActiveConversationScope()
     },
 
-    /**
-     * Model stream handlers
-     */
-    _handleModelCallStarted(event: RuntimeFrontendEvent) {
-      applyModelCallStarted(this, event)
-    },
-
-    _handleModelReasoningDelta(event: RuntimeFrontendEvent) {
-      applyModelReasoningDelta(this, event)
-    },
-
-    _handleModelReasoningCompleted(event: RuntimeFrontendEvent) {
-      applyModelReasoningCompleted(this, event)
-    },
-
-    _handleModelStreamDelta(event: RuntimeFrontendEvent) {
-      applyModelStreamDelta(this, event)
-    },
-
-    _handleModelMessageCompleted(event: RuntimeFrontendEvent) {
-      applyModelMessageCompleted(this, event)
-    },
-
-    /**
-     * Tool handlers
-     */
-    _handleToolCallProposed(event: RuntimeFrontendEvent) {
-      applyToolLifecycleEvent(this, event, 'proposed')
-    },
-
     _handleToolApprovalRequested(event: RuntimeFrontendEvent) {
       if (isBackgroundEvent(event, this.activeRequestId)) return
       applyToolApprovalRequested(this, event)
       if (!String(event.payload?.source_task_id || '').trim()) {
         this._promoteAgentPackageScopeFromEvent(event)
       }
-    },
-
-    _handleToolApprovalResolved(event: RuntimeFrontendEvent) {
-      applyToolApprovalResolved(this, event)
-    },
-
-    _handleToolCallStarted(event: RuntimeFrontendEvent) {
-      applyToolLifecycleEvent(this, event, 'started')
-    },
-
-    _handleToolCallCompleted(event: RuntimeFrontendEvent) {
-      applyToolLifecycleEvent(this, event, 'completed')
-    },
-
-    _handleToolCallFailed(event: RuntimeFrontendEvent) {
-      applyToolLifecycleEvent(this, event, 'failed')
-    },
-
-    _handleToolObservation(event: RuntimeFrontendEvent) {
-      applyToolLifecycleEvent(this, event, 'observed')
-    },
-
-    /**
-     * Context/Memory/Knowledge/Scheduler handlers
-     */
-    _handleContextEvent(event: RuntimeFrontendEvent) {
-      applyContextActivityEvent(this, event)
-    },
-
-    _handleMemoryEvent(event: RuntimeFrontendEvent) {
-      applyMemoryActivityEvent(this, event)
-    },
-
-    _handleKnowledgeEvent(event: RuntimeFrontendEvent) {
-      applyKnowledgeActivityEvent(this, event)
-    },
-
-    _handleWorkspaceEvent(event: RuntimeFrontendEvent) {
-      applyWorkspaceEvent(this, event)
-    },
-
-    _handleExtensionsEvent(event: RuntimeFrontendEvent) {
-      applyExtensionsEvent(this, event)
-    },
-
-    _handleSchedulerEvent(event: RuntimeFrontendEvent) {
-      applySchedulerActivityEvent(this, event)
     },
 
     /**
@@ -1370,9 +1110,7 @@ export const useRuntimeStore = defineStore('runtime', {
       for (const event of session.recovery_events || []) {
         this._dispatchEvent(event)
       }
-      for (const id of session.recovery_event_ids || []) {
-        processedEventIds.add(id)
-      }
+      rememberRuntimeEventIds(session.recovery_event_ids || [])
     },
 
     _restoreProcessEvents(events: RuntimeFrontendEvent[]) {
@@ -1744,10 +1482,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeMainSessionId = null
       this.activeAgentSessionId = null
       this.activeWorkspaceId = null
-    },
-
-    _recordDebugEvent(event: RuntimeFrontendEvent) {
-      recordDebugEvent(this, event)
     },
 
     _recordTimelineEvent(event: RuntimeFrontendEvent) {

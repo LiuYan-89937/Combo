@@ -41,6 +41,7 @@ RuntimeInstanceStatus = Literal[
     "failed",
     "cancelled",
 ]
+RuntimeExecutionStatus = Literal["waiting_approval", "waiting_external", "completed", "failed", "cancelled"]
 CapabilityKind = Literal["skill", "tool", "mcp_server", "mcp_tool", "dependency"]
 CapabilitySelectionStatus = Literal["selected", "rejected"]
 TaskRevisionAction = Literal["created", "continued", "revised", "cancelled", "superseded"]
@@ -396,17 +397,24 @@ class CapabilitySnapshot(FrozenProtocolModel):
                 or projection.content_digest != resolved.content_digest
             ):
                 raise ValueError("capability projection identity differs from selected revision")
-        projected_aliases = tuple(
-            CapabilityToolAliasBinding(
-                model_alias=alias,
-                capability_id=projection.capability_id,
-                kind=projection.kind,
-                revision=projection.revision,
-                content_digest=projection.content_digest,
+        aliases: list[CapabilityToolAliasBinding] = []
+        for projection in self.projections:
+            kind = projection.kind
+            if kind != "tool" and kind != "mcp_tool":
+                if projection.model_tool_ids:
+                    raise ValueError("non-tool capability cannot expose model tool aliases")
+                continue
+            aliases.extend(
+                CapabilityToolAliasBinding(
+                    model_alias=alias,
+                    capability_id=projection.capability_id,
+                    kind=kind,
+                    revision=projection.revision,
+                    content_digest=projection.content_digest,
+                )
+                for alias in projection.model_tool_ids
             )
-            for projection in self.projections
-            for alias in projection.model_tool_ids
-        )
+        projected_aliases = tuple(aliases)
         projected_tool_ids = tuple(item.model_alias for item in projected_aliases)
         if self.tool_ids != projected_tool_ids:
             raise ValueError("capability snapshot tool IDs must exactly match ordered model aliases")

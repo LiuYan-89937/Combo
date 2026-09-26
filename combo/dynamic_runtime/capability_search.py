@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
+import logging
+import sqlite3
 from math import sqrt
 from threading import Lock
 from typing import Callable, Iterable
@@ -16,7 +18,7 @@ from combo.dynamic_runtime.capability_search_contracts import (
     CapabilitySearchResult,
 )
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
-from combo.dynamic_runtime.hybrid_retrieval import (
+from combo.context_system.hybrid_retrieval import (
     FusedRetrievalCandidate,
     RankedRetrievalCandidate,
     fuse_hybrid_rankings,
@@ -57,6 +59,7 @@ class ActiveVectorIndexStatus:
 
 
 EmbeddingRuntimeResolver = Callable[[], CapabilityEmbeddingRuntime | None]
+logger = logging.getLogger(__name__)
 
 
 class HybridCapabilitySearchIndex:
@@ -248,6 +251,7 @@ class HybridCapabilitySearchIndex:
         try:
             runtime = self._embedding_runtime()
         except Exception:
+            logger.exception("capability embedding runtime resolution failed; keeping lexical index")
             return
         if runtime is None:
             return
@@ -267,8 +271,14 @@ class HybridCapabilitySearchIndex:
             self._embedding_future = future
         future.add_done_callback(self._embedding_finished)
 
-    def _embedding_finished(self, _: Future[None]) -> None:
+    def _embedding_finished(self, future: Future[None]) -> None:
+        try:
+            future.result()
+        except Exception:
+            logger.exception("capability index update failed")
         with self._generation_lock:
+            if self._embedding_future is not future:
+                return
             self._embedding_future = None
             pending = self._pending_embedding
             self._pending_embedding = None
@@ -281,7 +291,7 @@ class HybridCapabilitySearchIndex:
                 """
                 select 1 from capability_search_generations
                 where dataset_digest = ? and search_mode = 'hybrid'
-                  and embedding_fingerprint = ? and status in ('building', 'active')
+                  and embedding_fingerprint = ? and status = 'active'
                 """,
                 (dataset_digest, fingerprint),
             ).fetchone()
@@ -293,93 +303,109 @@ class HybridCapabilitySearchIndex:
         documents: tuple[CapabilitySearchDocumentProjection, ...],
         runtime: CapabilityEmbeddingRuntime,
     ) -> None:
-        generation_id = uuid4().hex
-        now = _utc_now_text()
         try:
-            with self._database.transaction() as conn:
-                failed = conn.execute(
-                    """
-                    select generation_id from capability_search_generations
-                    where dataset_digest = ? and search_mode = 'hybrid'
-                      and embedding_fingerprint = ? and status = 'failed'
-                    """,
-                    (dataset_digest, runtime.fingerprint),
-                ).fetchone()
-                if failed is not None:
-                    generation_id = str(failed["generation_id"])
-                    conn.execute(
-                        """
-                        update capability_search_generations
-                        set status = 'building', diagnostic = null, created_at = ?
-                        where generation_id = ?
-                        """,
-                        (now, generation_id),
-                    )
-                else:
-                    conn.execute(
-                        """
-                        insert into capability_search_generations(
-                          generation_id, dataset_digest, search_mode, embedding_fingerprint,
-                          embedding_profile_id, embedding_dimensions, status, created_at
-                        ) values (?, ?, 'hybrid', ?, ?, ?, 'building', ?)
-                        """,
-                        (
-                            generation_id,
-                            dataset_digest,
-                            runtime.fingerprint,
-                            runtime.profile_id,
-                            runtime.dimensions,
-                            now,
-                        ),
-                    )
             vectors = runtime.embed_documents([item.embedding_text for item in documents])
             if len(vectors) != len(documents):
                 raise RuntimeError("embedding result count differs from capability document count")
             normalized = tuple(_validated_vector(value, runtime.dimensions) for value in vectors)
+        except Exception as exc:
+            logger.exception("capability document embedding failed; keeping lexical index")
             with self._database.transaction() as conn:
-                conn.execute("delete from capability_search_documents where generation_id = ?", (generation_id,))
-                conn.execute("delete from capability_search_fts where generation_id = ?", (generation_id,))
-                _insert_documents(conn, generation_id, documents, embeddings=normalized)
-                active = conn.execute(
+                existing = conn.execute(
                     """
-                    select generation.dataset_digest
-                    from capability_search_active_generation active
-                    join capability_search_generations generation
-                      on generation.generation_id = active.generation_id
-                    where active.singleton = 1
-                    """
+                    select generation_id, status from capability_search_generations
+                    where dataset_digest = ? and search_mode = 'hybrid'
+                      and embedding_fingerprint = ?
+                    """,
+                    (dataset_digest, runtime.fingerprint),
                 ).fetchone()
-                if active is None or str(active["dataset_digest"]) != dataset_digest:
+                if existing is None:
                     conn.execute(
-                        "update capability_search_generations set status = 'retired' where generation_id = ?",
-                        (generation_id,),
+                        """
+                        insert into capability_search_generations(
+                          generation_id, dataset_digest, search_mode, embedding_fingerprint,
+                          embedding_profile_id, embedding_dimensions, status, diagnostic, created_at
+                        ) values (?, ?, 'hybrid', ?, ?, ?, 'failed', ?, ?)
+                        """,
+                        (
+                            uuid4().hex, dataset_digest, runtime.fingerprint,
+                            runtime.profile_id, runtime.dimensions,
+                            f"{type(exc).__name__}: {exc}", _utc_now_text(),
+                        ),
                     )
-                    return
-                activated = _utc_now_text()
-                conn.execute("update capability_search_generations set status = 'retired' where status = 'active'")
+                elif str(existing["status"]) != "active":
+                    conn.execute(
+                        """
+                        update capability_search_generations set status = 'failed', diagnostic = ?
+                        where generation_id = ?
+                        """,
+                        (f"{type(exc).__name__}: {exc}", str(existing["generation_id"])),
+                    )
+            return
+        with self._database.transaction() as conn:
+            active = conn.execute(
+                """
+                select generation.dataset_digest
+                from capability_search_active_generation active
+                join capability_search_generations generation
+                  on generation.generation_id = active.generation_id
+                where active.singleton = 1
+                """
+            ).fetchone()
+            if active is None or str(active["dataset_digest"]) != dataset_digest:
+                return
+            existing = conn.execute(
+                """
+                select generation_id, status from capability_search_generations
+                where dataset_digest = ? and search_mode = 'hybrid'
+                  and embedding_fingerprint = ?
+                """,
+                (dataset_digest, runtime.fingerprint),
+            ).fetchone()
+            if existing is not None and str(existing["status"]) == "active":
+                return
+            generation_id = str(existing["generation_id"]) if existing is not None else uuid4().hex
+            now = _utc_now_text()
+            if existing is None:
                 conn.execute(
                     """
-                    update capability_search_generations set status = 'active', activated_at = ?
+                    insert into capability_search_generations(
+                      generation_id, dataset_digest, search_mode, embedding_fingerprint,
+                      embedding_profile_id, embedding_dimensions, status, created_at
+                    ) values (?, ?, 'hybrid', ?, ?, ?, 'building', ?)
+                    """,
+                    (
+                        generation_id, dataset_digest, runtime.fingerprint,
+                        runtime.profile_id, runtime.dimensions, now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    update capability_search_generations
+                    set status = 'building', diagnostic = null, created_at = ?
                     where generation_id = ?
                     """,
-                    (activated, generation_id),
+                    (now, generation_id),
                 )
-                conn.execute(
-                    """
-                    update capability_search_active_generation
-                    set generation_id = ?, changed_at = ? where singleton = 1
-                    """,
-                    (generation_id, activated),
-                )
-        except Exception as exc:
-            with self._database.transaction() as conn:
-                conn.execute(
-                    """
-                    update capability_search_generations set status = 'failed', diagnostic = ?
-                    where generation_id = ? and status = 'building'
-                    """,
-                    (f"{type(exc).__name__}: {exc}", generation_id),
-                )
+            conn.execute("delete from capability_search_documents where generation_id = ?", (generation_id,))
+            conn.execute("delete from capability_search_fts where generation_id = ?", (generation_id,))
+            _insert_documents(conn, generation_id, documents, embeddings=normalized)
+            conn.execute("update capability_search_generations set status = 'retired' where status = 'active'")
+            conn.execute(
+                """
+                update capability_search_generations set status = 'active', activated_at = ?
+                where generation_id = ?
+                """,
+                (now, generation_id),
+            )
+            conn.execute(
+                """
+                update capability_search_active_generation
+                set generation_id = ?, changed_at = ? where singleton = 1
+                """,
+                (generation_id, now),
+            )
 
     def _lexical_ranking(
         self,
@@ -433,28 +459,33 @@ class HybridCapabilitySearchIndex:
             return ()
         try:
             runtime = self._embedding_runtime()
-            if runtime is None:
+        except Exception:
+            logger.exception("capability embedding runtime resolution failed; using lexical ranking")
+            return ()
+        if runtime is None:
+            return ()
+        with self._database.connection(query_only=True) as conn:
+            generation = conn.execute(
+                """
+                select embedding_fingerprint, embedding_dimensions
+                from capability_search_generations where generation_id = ?
+                """,
+                (generation_id,),
+            ).fetchone()
+            if generation is None or str(generation["embedding_fingerprint"] or "") != runtime.fingerprint:
                 return ()
-            with self._database.connection(query_only=True) as conn:
-                generation = conn.execute(
-                    """
-                    select embedding_fingerprint, embedding_dimensions
-                    from capability_search_generations where generation_id = ?
-                    """,
-                    (generation_id,),
-                ).fetchone()
-                if generation is None or str(generation["embedding_fingerprint"] or "") != runtime.fingerprint:
-                    return ()
-                rows = conn.execute(
-                    """
-                    select capability_id, embedding_json from capability_search_documents
-                    where generation_id = ? and embedding_json is not null
-                      and search_scope = ? and parent_capability_id is ?
-                    """,
-                    (generation_id, search_scope, parent_capability_id),
-                ).fetchall()
+            rows = conn.execute(
+                """
+                select capability_id, embedding_json from capability_search_documents
+                where generation_id = ? and embedding_json is not null
+                  and search_scope = ? and parent_capability_id is ?
+                """,
+                (generation_id, search_scope, parent_capability_id),
+            ).fetchall()
+        try:
             query_vector = _validated_vector(runtime.embed_query(query), runtime.dimensions)
         except Exception:
+            logger.exception("capability query embedding failed; using lexical ranking")
             return ()
         scored = []
         for row in rows:
@@ -565,7 +596,7 @@ def _search_boundary(
     return next(iter(boundaries))
 
 
-def _insert_documents(conn: object, generation_id: str, documents: tuple[CapabilitySearchDocumentProjection, ...], *, embeddings: tuple[tuple[float, ...], ...] | None) -> None:
+def _insert_documents(conn: sqlite3.Connection, generation_id: str, documents: tuple[CapabilitySearchDocumentProjection, ...], *, embeddings: tuple[tuple[float, ...], ...] | None) -> None:
     for index, document in enumerate(documents):
         embedding_json = None if embeddings is None else json.dumps(embeddings[index], separators=(",", ":"))
         conn.execute(

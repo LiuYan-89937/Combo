@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import Any, Never, Protocol
 
 from combo.dynamic_runtime.capability_definitions import (
     MCPToolDefinition,
@@ -19,11 +19,12 @@ from combo.runtime_protocol import (
 )
 from combo.runtime_i18n import RuntimeLocale
 from combo.tooling.approval_policy import (
+    ToolApprovalRequirement,
     ToolApprovalOverrideConfig,
     ToolApprovalPolicyConfig,
 )
 from combo.tooling.compiler import ToolCompiler
-from combo.tooling.gateway import ToolApprovalTrustResolver
+from combo.tooling.gateway import ToolApprovalTrustResolver, ToolEntrypoint
 from combo.tooling.output_store import (
     TOOL_OUTPUT_STORE_RESOURCE,
     ToolOutputPolicy,
@@ -32,7 +33,6 @@ from combo.tooling.output_store import (
 from combo.tooling.spec import ToolLoopPolicyConfig, ToolOutputCompressionConfig, ToolSpec
 
 
-ToolEntrypoint = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 ReleaseCallback = Callable[[], None]
 
 _MCP_TOOL_ENTRYPOINT_OUTPUT_SCHEMA = {
@@ -52,7 +52,7 @@ _MCP_TOOL_ENTRYPOINT_OUTPUT_SCHEMA = {
 @dataclass(frozen=True, slots=True)
 class ToolEntrypointLease:
     entrypoint: ToolEntrypoint
-    hard_risk_evaluator: ToolEntrypoint | None
+    hard_risk_evaluator: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None
     release_callback: ReleaseCallback
 
     def __post_init__(self) -> None:
@@ -291,7 +291,7 @@ def _compile_tool(
     *,
     definition: ToolDefinition,
     entrypoint: ToolEntrypoint,
-    hard_risk_evaluator: ToolEntrypoint | None,
+    hard_risk_evaluator: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None,
     resources: Mapping[str, Any],
     output: ToolOutputRuntimeLease,
     approval: ToolApprovalRuntimeLease,
@@ -440,7 +440,7 @@ def _approval_policy(
     approval_mode: str,
 ) -> ToolApprovalPolicyConfig:
     if approval_mode == "always_approval":
-        levels = {"low": "ask", "medium": "ask", "high": "ask"}
+        levels: dict[str, ToolApprovalRequirement] = {"low": "ask", "medium": "ask", "high": "ask"}
         action = "deny" if runtime_policy.approval == "deny" else "ask"
     elif approval_mode == "auto":
         levels = {"low": "allow", "medium": "allow", "high": "allow"}
@@ -452,7 +452,9 @@ def _approval_policy(
         raise ValueError(f"unsupported runtime approval mode: {approval_mode}")
     return ToolApprovalPolicyConfig(
         mode="custom",
-        **levels,
+        low=levels["low"],
+        medium=levels["medium"],
+        high=levels["high"],
         tool_overrides={
             alias: ToolApprovalOverrideConfig(
                 risk_level=runtime_policy.risk_level,
@@ -514,7 +516,7 @@ class _CompositeRelease:
 def _raise_with_release_errors(
     cause: BaseException,
     release_errors: tuple[BaseException, ...],
-) -> None:
+) -> Never:
     if release_errors:
         raise BaseExceptionGroup(
             "tool materialization and resource cleanup failed",

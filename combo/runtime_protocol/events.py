@@ -179,7 +179,7 @@ class ProgressPayload(FrozenProtocolModel):
     def _progress_units_are_consistent(self) -> "ProgressPayload":
         if (self.completed_units is None) != (self.total_units is None):
             raise ValueError("progress units must be set together")
-        if self.completed_units is not None and self.completed_units > self.total_units:
+        if self.completed_units is not None and self.total_units is not None and self.completed_units > self.total_units:
             raise ValueError("completed_units cannot exceed total_units")
         return self
 

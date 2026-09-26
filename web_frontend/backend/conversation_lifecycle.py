@@ -7,11 +7,14 @@ from pathlib import Path
 import shutil
 from time import monotonic
 from collections.abc import Callable
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
+from uuid import uuid4
 
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.dynamic_runtime.dispatcher import CommandExecutionRegistry
+from combo.dynamic_runtime.repositories.conversation import ConversationIdentity, ConversationStore, WorkspaceIdentity
 from combo.dynamic_runtime.run_control import RuntimeRunControlRegistry
+from combo.dynamic_runtime.scheduler_store import ACTIVE_RUN_STATUSES
 from combo.runtime_kernel.persistence import delete_checkpoint_thread
 from web_frontend.backend.attachment_upload_store import AttachmentUploadStore
 
@@ -25,7 +28,7 @@ class ConversationDeletionResult:
     session_ids: tuple[str, ...]
     released_bytes: int
     deleted_file_count: int
-    detached_memory_revision_count: int
+    deleted_memory_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,12 +45,13 @@ class _ConversationDeletionPlan:
 
 
 class ConversationLifecycleService:
-    """Owns cancellation, durable deletion, and filesystem cleanup for conversations."""
+    """Owns managed workspace creation, cancellation, deletion, and file cleanup."""
 
     def __init__(
         self,
         *,
         database: DynamicRuntimeDatabase,
+        conversations: ConversationStore,
         run_controls: RuntimeRunControlRegistry,
         command_executions: CommandExecutionRegistry,
         checkpointer: Any,
@@ -55,12 +59,14 @@ class ConversationLifecycleService:
         managed_workspace_root: Path,
         attachment_uploads: AttachmentUploadStore,
         close_session_processes: Callable[[tuple[str, ...]], None],
+        scheduler_changed: Callable[[], None],
         quiesce_timeout_seconds: float,
         quiesce_poll_seconds: float,
     ) -> None:
         if quiesce_timeout_seconds <= 0 or quiesce_poll_seconds <= 0:
             raise ValueError("conversation lifecycle quiesce timings must be positive")
         self._database = database
+        self._conversations = conversations
         self._run_controls = run_controls
         self._command_executions = command_executions
         self._checkpointer = checkpointer
@@ -68,8 +74,94 @@ class ConversationLifecycleService:
         self._managed_workspace_root = Path(managed_workspace_root).expanduser().resolve()
         self._attachment_uploads = attachment_uploads
         self._close_session_processes = close_session_processes
+        self._scheduler_changed = scheduler_changed
         self._quiesce_timeout_seconds = float(quiesce_timeout_seconds)
         self._quiesce_poll_seconds = float(quiesce_poll_seconds)
+
+    def create_managed(self, *, principal_id: str, title: str) -> ConversationIdentity:
+        session_id = uuid4().hex
+        workspace_id, workspace_path = self._create_managed_directory()
+        try:
+            self._conversations.create_managed_conversation(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                principal_id=principal_id,
+                managed_path=str(workspace_path),
+                title=title,
+            )
+        except BaseException:
+            workspace_path.rmdir()
+            raise
+        return self._conversations.require_identity(session_id)
+
+    def create_managed_workspace(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        mode: Literal["isolated", "project"],
+    ) -> WorkspaceIdentity:
+        workspace_id, workspace_path = self._create_managed_directory()
+        try:
+            self._conversations.create_managed_workspace(
+                workspace_id=workspace_id,
+                principal_id=principal_id,
+                managed_path=str(workspace_path),
+                title=title,
+                mode=mode,
+            )
+        except BaseException:
+            workspace_path.rmdir()
+            raise
+        return self._conversations.require_workspace(workspace_id)
+
+    def create_linked_workspace(
+        self,
+        *,
+        principal_id: str,
+        source_path: str,
+        title: str,
+        mode: Literal["isolated", "project"],
+    ) -> WorkspaceIdentity:
+        if not source_path.strip():
+            raise FileNotFoundError("linked workspace directory does not exist")
+        source = Path(source_path).expanduser().resolve()
+        if not source.is_dir():
+            raise FileNotFoundError("linked workspace directory does not exist")
+        workspace_id = uuid4().hex
+        return self._conversations.create_linked_workspace(
+            workspace_id=workspace_id,
+            principal_id=principal_id,
+            source_path=str(source),
+            title=title,
+            mode=mode,
+        )
+
+    def _create_managed_directory(self) -> tuple[str, Path]:
+        workspace_id = uuid4().hex
+        self._managed_workspace_root.mkdir(parents=True, exist_ok=True)
+        workspace_path = self._managed_workspace_root / workspace_id
+        workspace_path.mkdir(exist_ok=False)
+        return workspace_id, workspace_path
+
+    def create_in_workspace(
+        self,
+        *,
+        principal_id: str,
+        workspace_id: str,
+        title: str,
+    ) -> ConversationIdentity:
+        workspace = self._conversations.require_workspace(workspace_id)
+        if workspace.principal_id != principal_id or workspace.status != "active":
+            raise LookupError("workspace not found")
+        session_id = uuid4().hex
+        self._conversations.create_conversation(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            principal_id=principal_id,
+            title=title,
+        )
+        return self._conversations.require_identity(session_id)
 
     async def delete_one(self, *, principal_id: str, session_id: str) -> ConversationDeletionResult:
         return await self.delete_many(principal_id=principal_id, session_ids=(session_id,))
@@ -83,6 +175,94 @@ class ConversationLifecycleService:
         return await self.delete_many(
             principal_id=principal_id,
             session_ids=tuple(str(row["session_id"]) for row in rows),
+        )
+
+    async def delete_workspace(self, *, principal_id: str, workspace_id: str) -> ConversationDeletionResult:
+        owner = _required_text(principal_id, "principal_id")
+        workspace = self._conversations.require_workspace(workspace_id)
+        if workspace.principal_id != owner or workspace.status != "active":
+            raise LookupError("workspace not found")
+        with self._database.connection(query_only=True) as conn:
+            if workspace.kind == "mounted":
+                rows = conn.execute(
+                    """
+                    select workspace.workspace_id from workspaces as workspace
+                    join workspace_mount_records as mount on mount.mount_record_id = workspace.mount_record_id
+                    where workspace.principal_id = ? and workspace.status = 'active'
+                      and mount.source_path = (
+                        select source_path from workspace_mount_records where mount_record_id = ?
+                      )
+                    """,
+                    (owner, workspace.mount_record_id),
+                ).fetchall()
+                workspace_ids = tuple(str(row["workspace_id"]) for row in rows)
+            else:
+                workspace_ids = (workspace.workspace_id,)
+            if not workspace_ids:
+                raise LookupError("workspace not found")
+            placeholders = _placeholders(workspace_ids)
+            session_rows = conn.execute(
+                f"select session_id from conversations where workspace_id in ({placeholders}) and status != 'deleted'",
+                workspace_ids,
+            ).fetchall()
+        with self._database.transaction() as conn:
+            active_run = conn.execute(
+                f"""
+                select 1 from scheduler_runs as run
+                join scheduler_jobs as job on job.job_id = run.job_id
+                where job.workspace_id in ({placeholders})
+                  and run.status in ({_placeholders(ACTIVE_RUN_STATUSES)}) limit 1
+                """,
+                (*workspace_ids, *ACTIVE_RUN_STATUSES),
+            ).fetchone()
+            if active_run is not None:
+                raise RuntimeError("workspace has an active scheduled run")
+            conn.execute(
+                f"update scheduler_jobs set status = 'deleted' where workspace_id in ({placeholders})",
+                workspace_ids,
+            )
+        self._scheduler_changed()
+        session_ids = tuple(str(row["session_id"]) for row in session_rows)
+        result = await self.delete_many(principal_id=owner, session_ids=session_ids)
+        with self._database.transaction() as conn:
+            remaining = conn.execute(
+                f"select 1 from conversations where workspace_id in ({placeholders}) limit 1",
+                workspace_ids,
+            ).fetchone()
+            if remaining is not None:
+                raise RuntimeError("workspace gained a conversation during deletion")
+            memory_rows = conn.execute(
+                f"select distinct memory_id from memory_revisions where workspace_id in ({placeholders})",
+                workspace_ids,
+            ).fetchall()
+            memory_ids = tuple(str(row["memory_id"]) for row in memory_rows)
+            _delete_memories(conn, memory_ids)
+            conn.execute(
+                f"delete from scheduler_runs where job_id in (select job_id from scheduler_jobs where workspace_id in ({placeholders}))",
+                workspace_ids,
+            )
+            conn.execute(f"delete from scheduler_jobs where workspace_id in ({placeholders})", workspace_ids)
+            mount_rows = conn.execute(
+                f"select mount_record_id from workspaces where workspace_id in ({placeholders}) and mount_record_id is not null",
+                workspace_ids,
+            ).fetchall()
+            conn.execute(f"delete from workspaces where workspace_id in ({placeholders})", workspace_ids)
+            mount_ids = tuple(str(row["mount_record_id"]) for row in mount_rows)
+            if mount_ids:
+                conn.execute(
+                    f"delete from workspace_mount_records where mount_record_id in ({_placeholders(mount_ids)})",
+                    mount_ids,
+                )
+        released_bytes, deleted_files = (0, 0)
+        if workspace.managed_path:
+            released_bytes, deleted_files = _remove_tree(
+                Path(workspace.managed_path), allowed_root=self._managed_workspace_root,
+            )
+        return ConversationDeletionResult(
+            session_ids=result.session_ids,
+            released_bytes=result.released_bytes + released_bytes,
+            deleted_file_count=result.deleted_file_count + deleted_files,
+            deleted_memory_count=result.deleted_memory_count + len(memory_ids),
         )
 
     async def delete_many(
@@ -99,14 +279,14 @@ class ConversationLifecycleService:
         self._request_quiescence(plan)
         await self._await_quiescence(plan)
         self._close_session_processes(plan.session_ids)
+        deleted_memories = self._delete_database_records(plan)
         self._delete_checkpoints(plan)
-        detached_memories = self._delete_database_records(plan)
         released_bytes, deleted_files = self._delete_files(plan)
         return ConversationDeletionResult(
             session_ids=plan.session_ids,
             released_bytes=released_bytes,
             deleted_file_count=deleted_files,
-            detached_memory_revision_count=detached_memories,
+            deleted_memory_count=deleted_memories,
         )
 
     def _plan(self, *, owner: str, session_ids: tuple[str, ...]) -> _ConversationDeletionPlan:
@@ -205,14 +385,18 @@ class ConversationLifecycleService:
               )
               and not exists (
                 select 1 from scheduler_jobs as job
-                where job.workspace_id = workspace.workspace_id and job.status != 'deleted'
+                where job.workspace_id = workspace.workspace_id
               )
               and not exists (
                 select 1 from memory_heads as memory
                 where memory.workspace_id = workspace.workspace_id
+                  and memory.memory_id not in (
+                    select revision.memory_id from memory_revisions as revision
+                    where revision.source_session_id in ({session_placeholders})
+                  )
               )
             """,
-            (*workspace_ids, *deleting_session_ids),
+            (*workspace_ids, *deleting_session_ids, *deleting_session_ids),
         ).fetchall()
         return tuple(Path(str(row["managed_path"])).expanduser().resolve() for row in rows)
 
@@ -284,14 +468,12 @@ class ConversationLifecycleService:
         runtime_placeholders = _placeholders(plan.runtime_instance_ids) if plan.runtime_instance_ids else "null"
         command_placeholders = _placeholders(plan.command_ids) if plan.command_ids else "null"
         with self._database.transaction() as conn:
-            detached_memories = conn.execute(
-                f"""
-                update memory_revisions
-                set source_session_id = null, source_turn_id = null, created_by_runtime_instance_id = null
-                where source_session_id in ({session_placeholders})
-                """,
+            memory_rows = conn.execute(
+                f"select distinct memory_id from memory_revisions where source_session_id in ({session_placeholders})",
                 plan.session_ids,
-            ).rowcount
+            ).fetchall()
+            memory_ids = tuple(str(row["memory_id"]) for row in memory_rows)
+            _delete_memories(conn, memory_ids)
             conn.execute(
                 f"delete from delegated_task_notifications where session_id in ({session_placeholders})",
                 plan.session_ids,
@@ -366,7 +548,7 @@ class ConversationLifecycleService:
                 plan.session_ids,
             )
             self._delete_unused_isolated_workspaces(conn, plan)
-        return int(detached_memories)
+        return len(memory_ids)
 
     def _delete_unused_isolated_workspaces(self, conn: Any, plan: _ConversationDeletionPlan) -> None:
         if not plan.managed_workspace_paths:
@@ -458,3 +640,11 @@ def _placeholders(values: Iterable[Any]) -> str:
     if not materialized:
         raise ValueError("SQL placeholder collection must not be empty")
     return ",".join("?" for _ in materialized)
+
+
+def _delete_memories(conn: Any, memory_ids: tuple[str, ...]) -> None:
+    if not memory_ids:
+        return
+    placeholders = _placeholders(memory_ids)
+    for table in ("memory_search_fts", "memory_search_documents", "memory_heads", "memory_revisions"):
+        conn.execute(f"delete from {table} where memory_id in ({placeholders})", memory_ids)

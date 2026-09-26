@@ -28,6 +28,7 @@ from combo.runtime_protocol import (
     ToolCallRecord,
 )
 from combo.runtime_protocol.events import RuntimeEventPayload
+from combo.runtime_protocol.contracts import RuntimeExecutionStatus
 from combo.runtime_protocol.state_machines import (
     CONVERSATION_TURN_TRANSITIONS,
     RUNTIME_INSTANCE_TRANSITIONS,
@@ -78,7 +79,7 @@ class RuntimeExecutionCommitStore:
                     "error": None,
                 }
             )
-            turn: ConversationTurn | None = None
+            turn_transition: tuple[ConversationTurn, ConversationTurn] | None = None
             if instance.request.runtime_role == "main":
                 if delegation_claim_id is not None:
                     raise ValueError("main runtime execution cannot use a delegation claim")
@@ -99,6 +100,7 @@ class RuntimeExecutionCommitStore:
                         "terminal_at": None,
                     }
                 )
+                turn_transition = (turn, updated_turn)
             else:
                 _begin_delegated_task(
                     conn,
@@ -109,8 +111,9 @@ class RuntimeExecutionCommitStore:
                 )
 
             _replace_instance_row(conn, updated_instance, expected_status=instance.status, expected_attempt=instance.attempt_id)
-            if turn is not None:
-                _replace_turn_row(conn, updated_turn, expected_status=turn.status)
+            if turn_transition is not None:
+                old_turn, new_turn = turn_transition
+                _replace_turn_row(conn, new_turn, expected_status=old_turn.status)
             if resuming:
                 _resume_waiting_tool_calls(conn, instance.runtime_instance_id, now=now)
             event = runtime_event_for_instance(
@@ -128,7 +131,7 @@ class RuntimeExecutionCommitStore:
         self,
         *,
         claimed_instance: RuntimeInstance,
-        status: str,
+        status: RuntimeExecutionStatus,
         event_payload: RuntimeEventPayload | dict[str, Any],
         messages: Iterable[ConversationMessage] = (),
         tool_calls: Iterable[ToolCallRecord] = (),
@@ -189,7 +192,7 @@ class RuntimeExecutionCommitStore:
                 }
             )
             committed_messages = tuple(_committed_message(message, committed_at=now) for message in messages)
-            turn: ConversationTurn | None = None
+            turn_transition: tuple[ConversationTurn, ConversationTurn] | None = None
             if current.request.runtime_role == "main":
                 turn = _load_turn(conn, current.request.turn_id)
                 if turn.active_runtime_instance_id != current.runtime_instance_id:
@@ -202,6 +205,7 @@ class RuntimeExecutionCommitStore:
                         "terminal_at": terminal_at,
                     }
                 )
+                turn_transition = (turn, updated_turn)
                 for message in committed_messages:
                     _validate_message_owner(message, current)
                     insert_message(conn, message)
@@ -235,8 +239,9 @@ class RuntimeExecutionCommitStore:
                 expected_status=current.status,
                 expected_attempt=current.attempt_id,
             )
-            if turn is not None:
-                _replace_turn_row(conn, updated_turn, expected_status=turn.status)
+            if turn_transition is not None:
+                old_turn, new_turn = turn_transition
+                _replace_turn_row(conn, new_turn, expected_status=old_turn.status)
             event = runtime_event_for_instance(
                 updated_instance,
                 payload=event_payload,
@@ -326,7 +331,7 @@ def _commit_delegated_task(
     conn: Any,
     *,
     instance: RuntimeInstance,
-    status: str,
+    status: RuntimeExecutionStatus,
     event_payload: RuntimeEventPayload | dict[str, Any],
     now: str,
     terminal_at: str | None,

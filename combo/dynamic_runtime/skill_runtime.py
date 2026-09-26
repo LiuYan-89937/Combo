@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
 
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from combo.dynamic_runtime.capability_definitions import SkillContentRef, SkillDefinition
@@ -25,17 +24,6 @@ class RuntimeSkillEntry:
     capability_id: str
     revision: int
     definition: RuntimeSkill
-
-
-@runtime_checkable
-class SkillRuntime(Protocol):
-    def list(self) -> list[dict[str, object]]: ...
-
-    def describe(self, name: str) -> dict[str, object]: ...
-
-    def load(self, name: str) -> dict[str, object]: ...
-
-    def read_resource(self, name: str, *, path: str) -> dict[str, object]: ...
 
 
 class IndexedSkillRuntime:

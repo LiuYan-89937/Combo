@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
+
+
+logger = logging.getLogger(__name__)
+
+
+def _notify_cancellation_callbacks(callbacks: tuple[Callable[[], None], ...], *, operation: str) -> None:
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:
+            logger.exception("runtime %s cancellation callback failed", operation)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,11 +82,7 @@ class RuntimeRunControl:
                 *self._model_cancel_callbacks.values(),
                 *self._tool_cancel_callbacks.values(),
             )
-        for callback in callbacks:
-            try:
-                callback()
-            except Exception:
-                continue
+        _notify_cancellation_callbacks(callbacks, operation="drain")
 
     @property
     def drain_requested(self) -> bool:
@@ -116,11 +124,7 @@ class RuntimeRunControl:
             self._generation_revision += 1
             callbacks = tuple(self._model_cancel_callbacks.values())
             revision = self._generation_revision
-        for callback in callbacks:
-            try:
-                callback()
-            except Exception:
-                continue
+        _notify_cancellation_callbacks(callbacks, operation="model generation")
         return revision
 
     def request_tool_interrupt(self, reason: str = "user_steered") -> bool:
@@ -139,11 +143,7 @@ class RuntimeRunControl:
             self._tool_interrupt_reason = interrupt_reason
             self._tool_interrupt_event.set()
             callbacks = tuple(self._tool_cancel_callbacks.values())
-        for callback in callbacks:
-            try:
-                callback()
-            except Exception:
-                continue
+        _notify_cancellation_callbacks(callbacks, operation="tool")
         return True
 
     @property

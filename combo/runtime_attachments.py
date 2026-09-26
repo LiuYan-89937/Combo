@@ -803,9 +803,10 @@ def time_named_attachment_scope(now: datetime | None = None) -> str:
 
 def merge_attachments_into_user_config(user_config: Any, attachments: Any) -> dict[str, Any]:
     result = dict(user_config or {}) if isinstance(user_config, dict) else {}
+    configured_attachments = result.get("attachments")
     existing = (
-        [dict(item) for item in result.get("attachments") if isinstance(item, dict)]
-        if isinstance(result.get("attachments"), list)
+        [dict(item) for item in configured_attachments if isinstance(item, dict)]
+        if isinstance(configured_attachments, list)
         else []
     )
     payload = (
@@ -921,8 +922,17 @@ def _bounded_attachment_text(
 
 
 def attachment_content_analysis_from_payload(item: dict[str, Any]) -> AttachmentContentAnalysis | None:
-    content_kind = str(item.get("content_kind") or "").strip()
-    if content_kind not in {"image", "text", "binary"}:
+    content_kind: AttachmentContentKind | None
+    raw_content_kind = item.get("content_kind")
+    if raw_content_kind == "image":
+        content_kind = "image"
+    elif raw_content_kind == "text":
+        content_kind = "text"
+    elif raw_content_kind == "binary":
+        content_kind = "binary"
+    else:
+        content_kind = None
+    if content_kind is None:
         return None
     warnings = item.get("parse_warnings")
     return AttachmentContentAnalysis(

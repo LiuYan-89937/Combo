@@ -284,7 +284,10 @@ class MCPRuntimePool:
         async with self._request_lane(digest, binding):
             connection = await self._ready_connection(digest)
             await self._ensure_catalog(digest, connection)
-            return await connection.client.call_tool(
+            client = connection.client
+            if client is None:
+                raise RuntimeError("MCP connection is unavailable")
+            return await client.call_tool(
                 name,
                 arguments,
                 read_timeout_seconds=binding.request_timeout_seconds,
@@ -295,14 +298,20 @@ class MCPRuntimePool:
         async with self._request_lane(digest, binding):
             connection = await self._ready_connection(digest)
             await self._ensure_catalog(digest, connection)
-            return await connection.client.read_resource(uri)
+            client = connection.client
+            if client is None:
+                raise RuntimeError("MCP connection is unavailable")
+            return await client.read_resource(uri)
 
     async def _get_prompt(self, digest: str, name: str, arguments: dict[str, str]) -> Any:
         binding = self._binding(digest)
         async with self._request_lane(digest, binding):
             connection = await self._ready_connection(digest)
             await self._ensure_catalog(digest, connection)
-            return await connection.client.get_prompt(name, arguments=arguments or None)
+            client = connection.client
+            if client is None:
+                raise RuntimeError("MCP connection is unavailable")
+            return await client.get_prompt(name, arguments=arguments or None)
 
     @asynccontextmanager
     async def _request_lane(
@@ -561,7 +570,11 @@ class MCPRuntimePool:
             and connection.client is client
         ):
             try:
-                async with client.listen(**subscriptions) as subscription:
+                async with client.listen(
+                    tools_list_changed=subscriptions["tools_list_changed"],
+                    prompts_list_changed=subscriptions["prompts_list_changed"],
+                    resources_list_changed=subscriptions["resources_list_changed"],
+                ) as subscription:
                     delay = 0.5
                     async for event in subscription:
                         if self._connections.get(digest) is not connection:

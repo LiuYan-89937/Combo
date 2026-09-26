@@ -25,38 +25,19 @@ from combo.dynamic_runtime.run_control import (
     RuntimeInputInjection,
     RuntimeRunControlRegistry,
 )
+from combo.runtime_protocol.delegation_requests import (
+    DelegationContinuationRequest,
+    DelegationMessageRequest,
+    DelegationRequest,
+    normalize_isolation,
+)
 from combo.runtime_protocol import (
     DelegationGrant,
-    ExecutionStrategy,
     RuntimeInstance,
     RuntimeRequest,
     TaskEnvelope,
 )
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class DelegationRequest:
-    strategy: ExecutionStrategy
-    agent_name: str
-    system_prompt: str
-    objective: str
-    capability_names: tuple[str, ...]
-    acceptance_criteria: tuple[str, ...]
-    isolation: str = "shared"
-
-
-@dataclass(frozen=True, slots=True)
-class DelegationContinuationRequest:
-    task_ref: str
-    instruction: str
-    acceptance_criteria: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class DelegationMessageRequest:
-    task_ref: str
-    message: str
 
 
 SHARED_WORKSPACE_WRITE_SCOPE = "."
@@ -515,14 +496,6 @@ def _delegated_task_description(request: DelegationRequest) -> str:
         )
         if part
     )
-
-
-def normalize_isolation(value: Any) -> str:
-    """把 isolation 参数归一化为 ``shared`` 或 ``worktree``。"""
-    isolation = str(value or "").strip().lower() or "shared"
-    if isolation not in {"shared", "worktree"}:
-        raise ValueError("isolation must be shared or worktree")
-    return isolation
 
 
 def _child_system_prompt(system_prompt: str, *, isolation: str = "shared") -> str:

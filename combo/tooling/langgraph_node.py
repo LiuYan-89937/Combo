@@ -15,7 +15,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
-from combo.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
+from combo.tooling.tool_events import emit_runtime_tool_activity
 from combo.tooling.builtins.ask_usr.specs import ASK_USR_TOOL_ID
 from combo.tooling.execution_context import (
     current_tool_approval_override,
@@ -88,16 +88,16 @@ class ComboToolNode:
     def __call__(
         self,
         state: Mapping[str, Any],
-        config: RunnableConfig = None,
-        runtime: Runtime = None,
+        config: RunnableConfig,
+        runtime: Runtime,
     ) -> dict[str, list[ToolMessage]]:
         return self.invoke(state, config=config, runtime=runtime)
 
     def invoke(
         self,
         state: Mapping[str, Any],
-        config: RunnableConfig = None,
-        runtime: Runtime = None,
+        config: RunnableConfig,
+        runtime: Runtime,
     ) -> dict[str, list[ToolMessage]]:
         messages = list(state.get(self.messages_key) or [])
         ai_message, tool_calls = latest_ai_tool_calls(messages)
@@ -262,13 +262,16 @@ class ComboToolNode:
         config: RunnableConfig,
         runtime: Runtime,
     ) -> Any:
-        return self._tool_node.invoke(state, config, runtime=runtime or Runtime())
+        return self._tool_node.invoke(state, config, runtime=runtime)
 
     def _wrap_tool_call(self, request: ToolCallRequest, execute: Callable[[ToolCallRequest], Any]) -> Any:
         tool_call = dict(request.tool_call)
         tool_id = str(tool_call.get("name") or "")
         tool_call_id = str(tool_call.get("id") or tool_id)
-        arguments = dict(tool_call.get("args") or {})
+        raw_arguments = tool_call.get("args")
+        if not isinstance(raw_arguments, dict) or not all(isinstance(key, str) for key in raw_arguments):
+            raise ValueError("tool call arguments must be an object with string keys")
+        arguments = raw_arguments
         public_arguments = self._public_arguments(tool_id, arguments)
         if self.allowed_tool_ids is not None and tool_id not in self.allowed_tool_ids:
             message = "Tool is not visible to this node."
@@ -415,7 +418,16 @@ def _tool_approval_request(tool: BaseTool) -> Callable[..., dict[str, Any] | Non
     if not isinstance(combo, dict):
         return None
     approval_request = combo.get("approval_request")
-    return approval_request if callable(approval_request) else None
+    if not callable(approval_request):
+        return None
+
+    def request(*args: Any, **kwargs: Any) -> dict[str, Any] | None:
+        result = approval_request(*args, **kwargs)
+        if result is not None and not isinstance(result, dict):
+            raise TypeError("tool approval callback must return an object or None")
+        return result
+
+    return request
 
 
 def _tool_trust_handler(tool: BaseTool) -> Callable[[str], None] | None:
@@ -426,7 +438,13 @@ def _tool_trust_handler(tool: BaseTool) -> Callable[[str], None] | None:
     if not isinstance(combo, dict):
         return None
     trust_tool = combo.get("trust_tool")
-    return trust_tool if callable(trust_tool) else None
+    if not callable(trust_tool):
+        return None
+
+    def trust(tool_name: str) -> None:
+        trust_tool(tool_name)
+
+    return trust
 
 
 def _tool_sensitive_argument_paths(tool: BaseTool) -> list[str]:

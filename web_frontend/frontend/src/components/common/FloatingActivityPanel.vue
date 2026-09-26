@@ -52,16 +52,6 @@ const emit = defineEmits<{ opened: [] }>()
   position: fixed;
   z-index: 35;
 }
-</style>
-
-<style scoped>
-.floating-activity-detail-shell {
-  width: 100%;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: 1fr;
-  transform-origin: top center;
-}
 
 .floating-activity-detail-panel {
   width: 100%;
@@ -71,6 +61,16 @@ const emit = defineEmits<{ opened: [] }>()
   border-radius: var(--app-radius-lg);
   background: var(--app-surface-elevated);
   box-shadow: var(--app-shadow-lg);
+}
+</style>
+
+<style scoped>
+.floating-activity-detail-shell {
+  width: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 1fr;
+  transform-origin: top center;
 }
 
 .floating-activity-detail-panel.scrollable {

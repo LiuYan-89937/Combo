@@ -14,8 +14,8 @@ from langgraph.runtime import Runtime
 from combo.runtime_kernel.services import RuntimeServices
 from combo.runtime_kernel.nodes.base import NodeExecutionContext, NodeImplementation
 from combo.runtime_kernel.observability.node_events import emit_runtime_node_event
-from combo.runtime_kernel.observability.schema import RuntimeObservationEvent
-from combo.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
+from combo.runtime_protocol.observation_event import RuntimeObservationEvent
+from combo.tooling.tool_events import emit_runtime_tool_activity
 from combo.runtime_kernel.observability.runtime_events import apply_node_metrics, emit_state_event
 from combo.runtime_kernel.state.runtime_graph import (
     runtime_graph_patch,
@@ -28,9 +28,9 @@ from combo.runtime_protocol.messages import (
     close_incomplete_tool_call_messages,
     incomplete_tool_call_ids,
 )
+from combo.runtime_protocol.interruption import RuntimeModelGenerationInterrupted
 from combo.tooling.execution_context import acknowledge_runtime_inputs, consume_runtime_inputs
 from combo.tooling.execution_context import (
-    RuntimeModelGenerationInterrupted,
     runtime_terminal_cancellation_requested,
 )
 
@@ -54,8 +54,8 @@ def make_fixed_runner(
 
     def runner(
         raw_state: dict[str, Any],
-        config: RunnableConfig = None,
-        runtime: Runtime = None,
+        config: RunnableConfig,
+        runtime: Runtime,
     ) -> dict[str, Any]:
         state = runtime_state_from_graph(raw_state)
         acknowledge_runtime_inputs(list(raw_state.get("messages") or []))

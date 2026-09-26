@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from io import StringIO
 import json
+import math
 import re
 from typing import Any
 
@@ -171,19 +173,29 @@ def _normalize_identifier(value: str) -> str:
 def _positive_number(value: object, fallback: float) -> float:
     if value is None:
         return fallback
-    number = float(value)
-    if number <= 0:
-        raise ValueError("MCP timeout must be positive")
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError("MCP timeout must be a positive number")
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise ValueError("MCP timeout must be a positive number") from exc
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError("MCP timeout must be a positive finite number")
     return number
 
 
 def _positive_integer(value: object, fallback: int) -> int:
     if value is None:
         return fallback
-    number = int(value)
-    if number < 1:
-        raise ValueError("MCP max_parallel_requests must be positive")
-    return number
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError("MCP max_parallel_requests must be a positive integer")
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError("MCP max_parallel_requests must be a positive integer") from exc
+    if not number.is_finite() or number < 1 or number != number.to_integral_value():
+        raise ValueError("MCP max_parallel_requests must be a positive integer")
+    return int(number)
 
 
 def _risk_level(value: object) -> str:

@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
-from typing import Any, Callable, Mapping, TextIO
+from typing import Any, Callable, IO, Mapping
 
 from combo.tooling.builtins.process.runtime import ShellRuntime
 from combo.tooling.workspace_paths import resolve_workspace_path
@@ -237,7 +237,7 @@ class ProcessManager:
         self,
         managed: ManagedProcess,
         stream_name: str,
-        stream: TextIO | None,
+        stream: IO[str] | None,
         *,
         output_changed: threading.Event,
     ) -> None:
@@ -355,7 +355,7 @@ class ProcessManager:
 
 
 def _read_stream(
-    stream: TextIO, buffer: OutputBuffer, output_changed: threading.Event,
+    stream: IO[str], buffer: OutputBuffer, output_changed: threading.Event,
     changed: threading.Condition,
 ) -> None:
     try:

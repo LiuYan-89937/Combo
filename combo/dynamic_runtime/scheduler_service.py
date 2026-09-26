@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,7 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from combo.dynamic_runtime.control_plane_store import WorkspaceSchedulerStore
+from combo.dynamic_runtime.scheduler_store import WorkspaceSchedulerStore
 from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.dynamic_runtime.repositories import CommandInbox, ConversationStore
 from combo.runtime_protocol import (
@@ -287,14 +287,14 @@ class SchedulerService:
             client_instance_id="scheduler-service",
             principal_id=principal_id,
             session_id=session_id,
-            payload=SendMessagePayload(
-                message_id=uuid4().hex,
-                content=_required(job, "task_content"),
-                execution_preference=str(job.get("strategy") or "react"),
-                approval_mode=str(job.get("approval_policy") or "ask"),
-                visibility="internal",
-                scheduler_run_id=run_id,
-            ),
+            payload=SendMessagePayload.model_validate({
+                "message_id": uuid4().hex,
+                "content": _required(job, "task_content"),
+                "execution_preference": job.get("strategy") or "react",
+                "approval_mode": job.get("approval_policy") or "ask",
+                "visibility": "internal",
+                "scheduler_run_id": run_id,
+            }),
         )
         receipt = self._commands.accept(
             envelope,
@@ -460,7 +460,12 @@ def _trigger(job: dict[str, Any]):
         return CronTrigger.from_crontab(schedule.expression, timezone=schedule.timezone)
     if schedule.schedule_type == "date":
         return DateTrigger(run_date=schedule.date, timezone=schedule.timezone)
-    return IntervalTrigger(seconds=schedule.interval_seconds, timezone=schedule.timezone)
+    interval_seconds = schedule.interval_seconds
+    if interval_seconds is None:
+        raise ValueError("interval trigger requires a positive interval expression")
+    # APScheduler forwards seconds to timedelta, which accepts fractional seconds.
+    interval_factory = cast(Callable[..., IntervalTrigger], IntervalTrigger)
+    return interval_factory(seconds=interval_seconds, timezone=schedule.timezone)
 
 
 def _required(value: dict[str, Any], key: str) -> str:

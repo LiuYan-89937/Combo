@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v29"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v30"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1424,6 +1424,24 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                     and message.role = 'user' and message.status = 'cancelled'
                 )
                 """,
+            ),
+        ),
+        MigrationStep(
+            version=30,
+            name="remove_memories_from_deleted_conversations",
+            statements=tuple(
+                f"""
+                delete from {table} where memory_id in (
+                  select distinct revision.memory_id from memory_revisions as revision
+                  where revision.source_session_id is null
+                    and json_extract(revision.payload_json, '$.source_session_id') is not null
+                    and not exists (
+                      select 1 from conversations as conversation
+                      where conversation.session_id = json_extract(revision.payload_json, '$.source_session_id')
+                    )
+                )
+                """
+                for table in ("memory_search_fts", "memory_search_documents", "memory_heads", "memory_revisions")
             ),
         ),
     )

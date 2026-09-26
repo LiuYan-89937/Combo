@@ -49,42 +49,12 @@ def context_limits_with_overrides(
 
 def model_context_limits(
     *,
-    services: Any | None = None,
-    state: Any | None = None,
-    model_role: str | None = None,
+    services: Any,
+    state: Any,
+    model_role: str,
 ) -> ModelContextLimits:
-    role = model_role or _model_role_from_services(services)
-    service = getattr(services, "model_operation_service", None) if services is not None else None
-    resolver = getattr(service, "context_limits_for_role", None)
-    if callable(resolver):
-        try:
-            limits = resolver(role, state=state)
-        except (LookupError, RuntimeError, ValueError):
-            if bool(getattr(service, "authoritative_runtime_model", False)):
-                raise
-            limits = None
-        if isinstance(limits, dict):
-            return _normalized_model_context_limits(limits)
-        if bool(getattr(service, "authoritative_runtime_model", False)):
-            raise RuntimeError("authoritative runtime model service returned no context limits")
-    try:
-        from combo.model_pool.resolver import resolve_available_chat_model
-
-        resolved = resolve_available_chat_model(role)
-    except Exception:
-        resolved = None
-    if resolved is None and role == "task":
-        try:
-            resolved = resolve_available_chat_model("main")
-        except Exception:
-            resolved = None
-    settings = resolved.settings if resolved is not None else None
-    return _normalized_model_context_limits(
-        {
-            "max_input_tokens": getattr(settings, "max_input_tokens", None),
-            "compression_trigger_tokens": getattr(settings, "compression_trigger_tokens", None),
-        }
-    )
+    limits = services.model_operation_service.context_limits_for_role(model_role, state=state)
+    return _normalized_model_context_limits(limits)
 
 
 def count_messages_tokens(

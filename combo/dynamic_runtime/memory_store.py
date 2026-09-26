@@ -1,21 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from combo.dynamic_runtime.hybrid_retrieval import RetrievalChannelEvidence
 from uuid import uuid4
 
+from combo.context_system.memory_results import MemorySearchResult
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.runtime_protocol import MemoryKind, MemoryRevision, MemoryScope
 from combo.dynamic_runtime.memory_search import HybridMemorySearchIndex
-
-
-@dataclass(frozen=True, slots=True)
-class MemorySearchResult:
-    revision: MemoryRevision
-    score: float
-    relevance: float = 0.0
-    evidence: tuple[RetrievalChannelEvidence, ...] = ()
 
 
 class ScopedMemoryStore:
@@ -211,22 +201,33 @@ class ScopedMemoryStore:
         principal_id: str,
         workspace_id: str,
         scope: MemoryScope | None = None,
-        limit: int = 100,
+        all_workspaces: bool = False,
+        limit: int | None = 100,
+        offset: int = 0,
     ) -> tuple[MemoryRevision, ...]:
-        if limit < 1:
+        if limit is not None and limit < 1:
             raise ValueError("memory list limit must be positive")
+        if offset < 0:
+            raise ValueError("memory list offset must not be negative")
         clauses = ["head.principal_id = ?", "head.status = 'active'"]
         parameters: list[object] = [_required_text(principal_id, "principal_id")]
-        owner_workspace_id = _required_text(workspace_id, "workspace_id")
-        if scope == "user":
-            clauses.append("head.scope = 'user'")
-        elif scope == "workspace":
-            clauses.append("head.scope = 'workspace' and head.workspace_id = ?")
-            parameters.append(owner_workspace_id)
-        else:
-            clauses.append("(head.scope = 'user' or head.workspace_id = ?)")
-            parameters.append(owner_workspace_id)
-        parameters.append(limit)
+        if not all_workspaces:
+            if scope == "user":
+                clauses.append("head.scope = 'user'")
+            elif scope == "workspace":
+                clauses.append("head.scope = 'workspace' and head.workspace_id = ?")
+                parameters.append(_required_text(workspace_id, "workspace_id"))
+            else:
+                clauses.append("(head.scope = 'user' or head.workspace_id = ?)")
+                parameters.append(_required_text(workspace_id, "workspace_id"))
+        limit_clause = "limit ? offset ?" if limit is not None else ""
+        order_clause = (
+            "head.updated_at desc, head.memory_id"
+            if all_workspaces else
+            "case head.scope when 'workspace' then 0 else 1 end, head.updated_at desc, head.memory_id"
+        )
+        if limit is not None:
+            parameters.extend((limit, offset))
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
                 f"""
@@ -235,9 +236,8 @@ class ScopedMemoryStore:
                 join memory_revisions as revision
                   on revision.memory_id = head.memory_id and revision.revision = head.revision
                 where {' and '.join(clauses)}
-                order by case head.scope when 'workspace' then 0 else 1 end,
-                         head.updated_at desc, head.memory_id
-                limit ?
+                order by {order_clause}
+                {limit_clause}
                 """,
                 tuple(parameters),
             ).fetchall()
@@ -251,6 +251,8 @@ class ScopedMemoryStore:
         query: str,
         limit: int,
         min_relevance: float = 0.0,
+        scope: MemoryScope | None = None,
+        all_workspaces: bool = False,
     ) -> tuple[MemorySearchResult, ...]:
         if self._search_index is None:
             raise RuntimeError("memory search index is not configured")
@@ -262,6 +264,8 @@ class ScopedMemoryStore:
                 query=query,
                 limit=limit,
                 min_relevance=min_relevance,
+                scope=scope,
+                all_workspaces=all_workspaces,
             )
         )
 

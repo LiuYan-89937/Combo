@@ -8,31 +8,38 @@ import json
 import logging
 import threading
 from time import perf_counter
-from typing import Any, Literal, Protocol
+from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage, messages_from_dict, messages_to_dict
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.types import Command
-from pydantic import BaseModel, ConfigDict, field_validator
 
-from combo.dynamic_runtime.conversation_projection import (
-    conversation_to_graph_messages,
-    graph_messages_to_conversation,
-)
+from combo.dynamic_runtime.conversation_context import ConversationContextService
 from combo.dynamic_runtime.context_snapshot_store import (
-    ConversationContextSnapshot,
     ConversationContextSnapshotStore,
 )
 from combo.dynamic_runtime.execution_commits import (
     RuntimeCancellationRequested,
     RuntimeExecutionCommitStore,
 )
+from combo.dynamic_runtime.launch_context import RuntimeLaunchContext, RuntimeLaunchContextResolver
 from combo.dynamic_runtime.delegation_store import DelegatedTaskClaim, DelegationStore
 from combo.dynamic_runtime.model_service import RuntimeModelResolver, register_runtime_model_handle
 from combo.dynamic_runtime.policy_repositories import UserRuntimePolicyStore
 from combo.dynamic_runtime.repositories import ConversationStore, RuntimeInstanceStore
+from combo.dynamic_runtime.runtime_results import (
+    RuntimeExecutionStatus,
+    RuntimeMessageProjection,
+    close_terminal_tool_calls,
+    drain_runtime_observations,
+    final_graph_message_content,
+    interrupt_payloads,
+    project_model_usage_records,
+    project_runtime_messages,
+    runtime_event_payload,
+)
+from combo.dynamic_runtime.runtime_inspection import RuntimeInspectionService
 from combo.dynamic_runtime.run_control import RuntimeRunControl, RuntimeRunControlRegistry
 from combo.dynamic_runtime.services import DynamicRuntimeServiceSet
-from combo.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from combo.dynamic_runtime.snapshot_tool_registry import SnapshotToolRegistryLease
 from combo.runtime_kernel.capability_state import bind_capability_snapshot
 from combo.runtime_kernel.persistence import delete_checkpoint_thread
@@ -51,67 +58,23 @@ from combo.runtime_protocol import (
     ConversationMessage,
     RuntimeErrorEnvelope,
     RuntimeInstance,
-    RuntimeModelUsage,
     TaskEnvelope,
     TextPart,
-    ToolCallPart,
     ToolCallRecord,
-    ToolResultPart,
 )
 from combo.runtime_protocol.messages import (
-    close_incomplete_tool_call_messages,
     incomplete_tool_call_ids,
-    represented_input_message_ids,
 )
-from combo.context_system.compression import is_context_summary_message, maybe_compress_messages
-from combo.context_system.history import conversation_projection_history, release_context_history
-from combo.context_system.token_counter import context_window_payload
-from combo.context_system.token_estimation import estimate_messages_tokens
-from combo.runtime_i18n import RuntimeLocale
+from combo.context_system.history import release_context_history
+from combo.runtime_protocol.interruption import RuntimeModelGenerationInterrupted, RuntimeToolExecutionCancelled
 from combo.tooling.execution_context import (
-    RuntimeModelGenerationInterrupted,
-    RuntimeToolExecutionCancelled,
     runtime_run_control_context,
     tool_output_session_context,
 )
 
 
-RuntimeExecutionStatus = Literal["waiting_approval", "waiting_external", "completed", "failed", "cancelled"]
 RuntimeObservationSink = Callable[[RuntimeInstance, Any], None]
 logger = logging.getLogger(__name__)
-
-
-class RuntimeLaunchContext(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    system_prompt: str
-    temporal_context: str
-    locale: RuntimeLocale = "zh-CN"
-    capability_instructions: str = ""
-    turn_directives: tuple[str, ...] = ()
-    workspace_root_alias: str = DEFAULT_BUILTIN_WORKSPACE_ROOT
-    allow_external_paths: bool = False
-    workspace_mounts: tuple[dict[str, Any], ...] = ()
-    attachments: tuple[dict[str, Any], ...] = ()
-
-    @field_validator("system_prompt", "temporal_context", "workspace_root_alias")
-    @classmethod
-    def _required_text(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("runtime launch text must not be empty")
-        return text
-
-
-class RuntimeLaunchContextResolver(Protocol):
-    def resolve(
-        self,
-        *,
-        instance: RuntimeInstance,
-        messages: list[ConversationMessage],
-        capability_snapshot: CapabilitySnapshot,
-    ) -> RuntimeLaunchContext:
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,15 +108,27 @@ class DynamicRuntimeService:
     ) -> None:
         self._service_set = service_set
         self._runtime_instances = runtime_instances
-        self._runtime_policies = runtime_policies
         self._conversations = conversations
-        self._context_snapshots = context_snapshots
         self._execution_commits = execution_commits
         self._run_controls = run_controls
         self._model_resolver = model_resolver
         self._launch_context_resolver = launch_context_resolver
         self._delegations = delegations
         self._observation_sink = observation_sink
+        self._inspection = RuntimeInspectionService(
+            service_set=service_set,
+            runtime_instances=runtime_instances,
+            model_resolver=model_resolver,
+        )
+        self._conversation_context = ConversationContextService(
+            conversations=conversations,
+            context_snapshots=context_snapshots,
+            runtime_instances=runtime_instances,
+            runtime_policies=runtime_policies,
+            model_resolver=model_resolver,
+            context_system=service_set.services.context_system,
+            inspection=self._inspection,
+        )
 
     def execute(self, runtime_instance_id: str) -> RuntimeExecutionResult:
         return self._run(
@@ -179,73 +154,16 @@ class DynamicRuntimeService:
         )
 
     def pending_interrupts(self, runtime_instance_id: str) -> tuple[dict[str, Any], ...]:
-        instance = self._runtime_instances.get(runtime_instance_id)
-        if instance.status not in {"waiting_approval", "waiting_external"}:
-            raise RuntimeError("runtime instance is not waiting for an interrupt response")
-        graph = self._service_set.graph_for(instance.request.strategy)
-        checkpoint = graph.graph_app.get_state(
-            {"configurable": {"thread_id": instance.runtime_instance_id}}
-        )
-        return tuple(_interrupt_payloads(raw={}, checkpoint=checkpoint))
+        return self._inspection.pending_interrupts(runtime_instance_id)
 
     def current_observations(self, runtime_instance_id: str) -> list[dict[str, Any]]:
-        return [
-            event.model_dump(mode="json")
-            for event in self._service_set.services.observability_manager.list_events()
-            if event.run_id == runtime_instance_id
-        ]
+        return self._inspection.current_observations(runtime_instance_id)
 
     def current_plan(self, runtime_instance_id: str) -> dict[str, Any] | None:
-        instance = self._runtime_instances.get(runtime_instance_id)
-        if instance.request.strategy != "plan_and_execute":
-            return None
-        graph = self._service_set.graph_for(instance.request.strategy)
-        checkpoint = graph.graph_app.get_state(
-            {"configurable": {"thread_id": instance.runtime_instance_id}}
-        )
-        values = getattr(checkpoint, "values", None) or {}
-        raw_runtime = values.get("runtime") if isinstance(values, dict) else None
-        if not isinstance(raw_runtime, dict):
-            return None
-        state = RuntimeState.model_validate(raw_runtime)
-        if state.plan.status == "empty":
-            return None
-        return state.plan.model_dump(mode="json")
+        return self._inspection.current_plan(runtime_instance_id)
 
     def current_context_window(self, runtime_instance_id: str) -> dict[str, Any] | None:
-        instance = self._runtime_instances.get(runtime_instance_id)
-        graph = self._service_set.graph_for(instance.request.strategy)
-        checkpoint = graph.graph_app.get_state(
-            {"configurable": {"thread_id": instance.runtime_instance_id}}
-        )
-        values = getattr(checkpoint, "values", None) or {}
-        raw_runtime = values.get("runtime") if isinstance(values, dict) else None
-        if not isinstance(raw_runtime, dict):
-            return None
-        context_window = _latest_context_window(
-            RuntimeState.model_validate(raw_runtime),
-            graph_messages=list(values.get("messages") or []),
-        )
-        if context_window is None:
-            return None
-        limits = self._model_resolver.context_limits_for_snapshot(
-            instance.request.policy_snapshot.model
-        )
-        current_limits = {
-            key: value
-            for key, value in limits.items()
-            if value is not None
-        }
-        return _recompute_context_window_ratios(
-            {
-                **{
-                    key: value
-                    for key, value in context_window.items()
-                    if value is not None
-                },
-                **current_limits,
-            }
-        )
+        return self._inspection.current_context_window(runtime_instance_id)
 
     def compress_main_context(
         self,
@@ -253,136 +171,10 @@ class DynamicRuntimeService:
         session_id: str,
         principal_id: str,
     ) -> dict[str, Any]:
-        identity = self._conversations.require_identity(session_id)
-        if identity.principal_id != principal_id:
-            raise PermissionError("conversation principal does not own the context snapshot")
-        through_task_revision = self._conversations.compactable_task_revision(session_id)
-        if through_task_revision is None:
-            return {"status": "skipped", "reason": "no_completed_turns"}
-
-        latest_runtime = self._runtime_instances.latest_completed_main(
+        return self._conversation_context.compress_main_context(
             session_id=session_id,
             principal_id=principal_id,
         )
-        if latest_runtime is None:
-            return {"status": "skipped", "reason": "no_completed_runtime"}
-        model_role = latest_runtime.request.policy_snapshot.model.operation
-
-        try:
-            current_policy = self._runtime_policies.require_for_principal(principal_id)
-            compression_detail = current_policy.context_compression_detail
-            keep_recent_messages = current_policy.context_compression_keep_recent_messages
-        except LookupError:
-            compression_detail = latest_runtime.request.policy_snapshot.context_compression_detail
-            keep_recent_messages = (
-                latest_runtime.request.policy_snapshot.context_compression_keep_recent_messages
-            )
-
-        graph_messages = self._session_context_messages(
-            session_id=session_id,
-            through_task_revision=through_task_revision,
-        )
-        if incomplete_tool_call_ids(graph_messages):
-            raise RuntimeError("conversation context contains incomplete tool call history")
-
-        limits = self._model_resolver.context_limits_for_snapshot(
-            latest_runtime.request.policy_snapshot.model
-        )
-        latest_snapshot = self._context_snapshots.latest(session_id)
-        if (
-            latest_snapshot is not None
-            and latest_snapshot.through_task_revision == through_task_revision
-            and sum(not is_context_summary_message(message) for message in graph_messages)
-            <= keep_recent_messages
-        ):
-            message_tokens = estimate_messages_tokens(graph_messages)
-            window = _manual_compression_context_window(
-                messages=graph_messages,
-                limits=limits,
-                model_role=model_role,
-            )
-            snapshot_updated_at = latest_snapshot.created_at
-            if _non_negative_int(latest_snapshot.context_window.get("token_count")) != message_tokens:
-                corrected_snapshot = ConversationContextSnapshot(
-                    session_id=session_id,
-                    principal_id=principal_id,
-                    through_task_revision=through_task_revision,
-                    graph_messages=tuple(messages_to_dict(graph_messages)),
-                    included_user_message_ids=latest_snapshot.included_user_message_ids,
-                    context_window=window,
-                    compression_report={
-                        "status": "skipped",
-                        "reason": "no_compressible_history",
-                        "original_message_count": len(graph_messages),
-                        "compressed_message_count": len(graph_messages),
-                        "compacted_message_count": 0,
-                        "token_estimate_before": message_tokens,
-                        "token_estimate_after": message_tokens,
-                    },
-                )
-                self._context_snapshots.append(corrected_snapshot)
-                snapshot_updated_at = corrected_snapshot.created_at
-            return {
-                "status": "skipped",
-                "reason": "no_compressible_history",
-                "original_message_count": len(graph_messages),
-                "compressed_message_count": len(graph_messages),
-                "compacted_message_count": 0,
-                "token_estimate_before": message_tokens,
-                "token_estimate_after": message_tokens,
-                "context_window": {**window, "updated_at": snapshot_updated_at},
-            }
-
-        context_runtime = self._service_set.services.context_system
-        compression_policy = context_runtime.config.default_policy.compression.model_copy(
-            update={
-                "enabled": True,
-                "trigger_token_threshold": limits.get("compression_threshold_tokens"),
-                "detail": compression_detail,
-                "keep_recent_messages": keep_recent_messages,
-            }
-        )
-
-        main_model = self._resolve_frozen_model(latest_runtime)
-        compression_model = self._resolve_frozen_compression_model(
-            latest_runtime,
-            fallback=main_model,
-        )
-        compressed_messages, report = maybe_compress_messages(
-            messages=graph_messages,
-            policy=compression_policy,
-            node_id="manual_context_compression",
-            summary_model=compression_model.model,
-            summary_model_max_output_tokens=compression_model.settings.max_output_tokens,
-            summary_model_metadata=compression_model.settings.metadata(),
-            force=True,
-        )
-        report_payload = report.model_dump(mode="json")
-        if report.status == "failed":
-            raise RuntimeError(report.error or "manual context compression failed")
-        if report.status != "completed":
-            return {**report_payload, "reason": report.reason or "no_compressible_history"}
-
-        window = _manual_compression_context_window(
-            messages=compressed_messages,
-            limits=limits,
-            model_role=model_role,
-        )
-        snapshot = ConversationContextSnapshot(
-            session_id=session_id,
-            principal_id=principal_id,
-            through_task_revision=through_task_revision,
-            graph_messages=tuple(messages_to_dict(compressed_messages)),
-            included_user_message_ids=latest_snapshot.included_user_message_ids if latest_snapshot else (),
-            context_window=window,
-            compression_report=report_payload,
-        )
-        self._context_snapshots.append(snapshot)
-        return {
-            **report_payload,
-            "snapshot_id": snapshot.snapshot_id,
-            "context_window": {**window, "updated_at": snapshot.created_at},
-        }
 
     def _run(
         self,
@@ -450,8 +242,8 @@ class DynamicRuntimeService:
             )
             canonical_messages, current_user_message = self._runtime_input(claimed_instance)
             graph = self._service_set.graph_for(claimed_instance.request.strategy)
-            resolved_model = self._resolve_frozen_model(claimed_instance)
-            compression_model = self._resolve_frozen_compression_model(
+            resolved_model = self._model_resolver.resolve_for_instance(claimed_instance)
+            compression_model = self._model_resolver.resolve_compression_for_instance(
                 claimed_instance,
                 fallback=resolved_model,
             )
@@ -474,7 +266,7 @@ class DynamicRuntimeService:
                     messages=canonical_messages,
                     capability_snapshot=snapshot,
                 )
-                graph_messages = self._session_context_messages(
+                graph_messages = self._conversation_context.session_messages(
                     session_id=claimed_instance.request.session_id,
                     through_task_revision=claimed_instance.request.task_revision,
                     canonical_messages=canonical_messages,
@@ -492,7 +284,7 @@ class DynamicRuntimeService:
                     snapshot=snapshot,
                     current_user_message=current_user_message,
                     launch_context=launch_context,
-                    inherited_context_window=self._inherited_context_window(claimed_instance),
+                    inherited_context_window=self._conversation_context.inherited_context_window(claimed_instance),
                 )
                 graph_input: Any = {
                     "messages": graph_messages,
@@ -513,6 +305,7 @@ class DynamicRuntimeService:
                 if isinstance(graph_input, dict)
                 else (getattr(graph.graph_app.get_state(config), "values", None) or {})
             )
+            observation_sink = self._observation_sink
             with (
                 self._service_set.scoped_tool_registry.bind(tool_registry_lease),
                 self._service_set.scoped_context_resources.bind(claimed_instance),
@@ -527,8 +320,8 @@ class DynamicRuntimeService:
                     fallback_raw=fallback_raw,
                     on_complete=release_runtime_leases,
                     on_observation=(
-                        (lambda chunk: self._observation_sink(claimed_instance, chunk))
-                        if self._observation_sink is not None
+                        (lambda chunk: observation_sink(claimed_instance, chunk))
+                        if observation_sink is not None
                         else None
                     ),
                 )
@@ -537,7 +330,7 @@ class DynamicRuntimeService:
             if not isinstance(authoritative, dict):
                 raise RuntimeError("fixed runtime graph returned an invalid checkpoint projection")
             state = RuntimeState.model_validate(authoritative.get("runtime") or {})
-            state.observability.events = _drain_runtime_observations(
+            state.observability.events = drain_runtime_observations(
                 self._service_set.services.observability_manager,
                 state=state,
             )
@@ -548,45 +341,22 @@ class DynamicRuntimeService:
                 state.execution.last_error_location = "runtime.cancel"
             graph_messages = list(authoritative.get("messages") or [])
             run_control.acknowledge_checkpointed_inputs(graph_messages)
-            interrupts = _interrupt_payloads(raw=raw, checkpoint=checkpoint)
+            interrupts = interrupt_payloads(raw=raw, checkpoint=checkpoint)
             status = _execution_status(state=state, graph_messages=graph_messages, interrupts=interrupts)
-            context_messages = (
-                _close_terminal_tool_calls(graph_messages, status=status)
-                if status in {"completed", "failed", "cancelled"} else graph_messages
-            )
-            projection_messages = conversation_projection_history(
-                store=self._service_set.services.graph_store, state=state, messages=context_messages,
-            )
-            if status in {"completed", "failed", "cancelled"}:
-                projection_messages = _close_terminal_tool_calls(projection_messages, status=status)
-            projected_for_records = graph_messages_to_conversation(
-                graph_messages=projection_messages,
-                current_user_message_id=current_user_message.message_id,
-                session_id=claimed_instance.request.session_id,
-                turn_id=claimed_instance.request.turn_id,
-                runtime_instance_id=claimed_instance.runtime_instance_id,
-                request_id=claimed_instance.request.request_id,
-                task_revision=claimed_instance.request.task_revision,
-                capability_snapshot=snapshot,
-                message_created_at=_model_message_created_at(state.observability.events),
-            )
-            projected_messages = (
-                []
-                if claimed_instance.request.runtime_role == "temporary"
-                or status in {"waiting_approval", "waiting_external"}
-                else projected_for_records
-            )
-            projected_tool_calls = _tool_call_records(
-                projected_for_records,
+            projection = project_runtime_messages(
                 instance=claimed_instance,
-                waiting_status=status,
-                observations=state.observability.events,
+                snapshot=snapshot,
+                state=state,
+                status=status,
+                graph_messages=graph_messages,
+                current_user_message_id=current_user_message.message_id,
+                graph_store=self._service_set.services.graph_store,
             )
             delivery_error = _delegated_delivery_error(
                 instance=claimed_instance,
                 status=status,
-                graph_messages=projection_messages,
-                tool_calls=projected_tool_calls,
+                graph_messages=projection.transcript_graph_messages,
+                tool_calls=projection.tool_calls,
             )
             if delivery_error is not None:
                 status = "failed"
@@ -594,27 +364,24 @@ class DynamicRuntimeService:
                 state.execution.finish_status = "failed"
                 state.execution.last_error = delivery_error
                 state.execution.last_error_location = "delegation.delivery"
+                projection = project_runtime_messages(
+                    instance=claimed_instance,
+                    snapshot=snapshot,
+                    state=state,
+                    status=status,
+                    graph_messages=graph_messages,
+                    current_user_message_id=current_user_message.message_id,
+                    graph_store=self._service_set.services.graph_store,
+                )
             error = _terminal_error(claimed_instance, status=status, state=state)
             try:
-                committed_instance = self._execution_commits.commit(
+                committed_instance = self._commit_projection(
                     claimed_instance=claimed_instance,
+                    event_instance=claimed_instance,
+                    state=state,
                     status=status,
-                    event_payload=_event_payload(
-                        claimed_instance,
-                        state=state,
-                        status=status,
-                        interrupts=interrupts,
-                        error=error,
-                        graph_messages=context_messages,
-                        conversation_messages=projected_messages,
-                        tool_calls=projected_tool_calls,
-                    ),
-                    messages=projected_messages,
-                    tool_calls=projected_tool_calls,
-                    context_snapshot=self._execution_context_snapshot(
-                        claimed_instance, state=state, messages=context_messages, status=status,
-                    ),
-                    model_usage=_model_usage_records(claimed_instance, state.observability.events),
+                    interrupts=interrupts,
+                    projection=projection,
                     error=error,
                 )
             except RuntimeCancellationRequested:
@@ -624,59 +391,24 @@ class DynamicRuntimeService:
                 state.execution.finished = True
                 state.execution.finish_status = "cancelled"
                 state.execution.last_error_location = "runtime.cancel"
-                context_messages = _close_terminal_tool_calls(graph_messages, status=status)
-                projection_messages = _close_terminal_tool_calls(
-                    conversation_projection_history(
-                        store=self._service_set.services.graph_store, state=state, messages=context_messages,
-                    ),
+                interrupts = []
+                projection = project_runtime_messages(
+                    instance=claimed_instance,
+                    snapshot=snapshot,
+                    state=state,
                     status=status,
-                )
-                projected_for_records = graph_messages_to_conversation(
-                    graph_messages=projection_messages,
+                    graph_messages=graph_messages,
                     current_user_message_id=current_user_message.message_id,
-                    session_id=claimed_instance.request.session_id,
-                    turn_id=claimed_instance.request.turn_id,
-                    runtime_instance_id=claimed_instance.runtime_instance_id,
-                    request_id=claimed_instance.request.request_id,
-                    task_revision=claimed_instance.request.task_revision,
-                    capability_snapshot=snapshot,
-                    message_created_at=_model_message_created_at(state.observability.events),
-                )
-                projected_messages = (
-                    []
-                    if claimed_instance.request.runtime_role == "temporary"
-                    else projected_for_records
+                    graph_store=self._service_set.services.graph_store,
                 )
                 error = _terminal_error(latest, status=status, state=state)
-                committed_instance = self._execution_commits.commit(
+                committed_instance = self._commit_projection(
                     claimed_instance=claimed_instance,
+                    event_instance=latest,
+                    state=state,
                     status=status,
-                    event_payload=_event_payload(
-                        latest,
-                        state=state,
-                        status=status,
-                        interrupts=[],
-                        error=error,
-                        graph_messages=context_messages,
-                        conversation_messages=projected_messages,
-                        tool_calls=_tool_call_records(
-                            projected_for_records,
-                            instance=claimed_instance,
-                            waiting_status=status,
-                            observations=state.observability.events,
-                        ),
-                    ),
-                    messages=projected_messages,
-                    tool_calls=_tool_call_records(
-                        projected_for_records,
-                        instance=claimed_instance,
-                        waiting_status=status,
-                        observations=state.observability.events,
-                    ),
-                    context_snapshot=self._execution_context_snapshot(
-                        claimed_instance, state=state, messages=context_messages, status=status,
-                    ),
-                    model_usage=_model_usage_records(claimed_instance, state.observability.events),
+                    interrupts=interrupts,
+                    projection=projection,
                     error=error,
                 )
             if status in {"completed", "failed", "cancelled"}:
@@ -687,8 +419,8 @@ class DynamicRuntimeService:
                 runtime_instance=committed_instance,
                 capability_snapshot=snapshot,
                 state=state,
-                graph_messages=tuple(context_messages),
-                conversation_messages=tuple(projected_messages),
+                graph_messages=tuple(projection.context_messages),
+                conversation_messages=tuple(projection.conversation_messages),
                 status=status,
                 interrupt_payloads=tuple(interrupts),
             )
@@ -711,6 +443,42 @@ class DynamicRuntimeService:
                     release_runtime_leases()
             finally:
                 self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
+
+    def _commit_projection(
+        self,
+        *,
+        claimed_instance: RuntimeInstance,
+        event_instance: RuntimeInstance,
+        state: RuntimeState,
+        status: RuntimeExecutionStatus,
+        interrupts: list[dict[str, Any]],
+        projection: RuntimeMessageProjection,
+        error: RuntimeErrorEnvelope | None,
+    ) -> RuntimeInstance:
+        return self._execution_commits.commit(
+            claimed_instance=claimed_instance,
+            status=status,
+            event_payload=runtime_event_payload(
+                event_instance,
+                state=state,
+                status=status,
+                interrupts=interrupts,
+                error=error,
+                graph_messages=projection.context_messages,
+                conversation_messages=projection.conversation_messages,
+                tool_calls=projection.tool_calls,
+            ),
+            messages=projection.conversation_messages,
+            tool_calls=projection.tool_calls,
+            context_snapshot=self._conversation_context.execution_snapshot(
+                claimed_instance,
+                state=state,
+                messages=projection.context_messages,
+                status=status,
+            ),
+            model_usage=project_model_usage_records(claimed_instance, state.observability.events),
+            error=error,
+        )
 
     def _delegated_continuation_messages(
         self,
@@ -743,7 +511,7 @@ class DynamicRuntimeService:
             raise RuntimeError("delegated task continuation checkpoint is unavailable")
         return (
             [
-                *_close_terminal_tool_calls(previous_messages, status=previous.status),
+                *close_terminal_tool_calls(previous_messages, status=previous.status),
                 *current_messages,
             ],
             previous_thread_id,
@@ -763,80 +531,6 @@ class DynamicRuntimeService:
                 thread_id,
             )
 
-    def _inherited_context_window(self, instance: RuntimeInstance) -> dict[str, Any] | None:
-        if instance.request.runtime_role != "main":
-            return None
-        context_snapshot = self._context_snapshots.latest(instance.request.session_id)
-        if (
-            context_snapshot is not None
-            and context_snapshot.through_task_revision < instance.request.task_revision
-        ):
-            return dict(context_snapshot.context_window)
-        previous = self._runtime_instances.latest_completed_main_before(
-            session_id=instance.request.session_id,
-            principal_id=instance.request.principal_id,
-            created_at=instance.created_at,
-        )
-        if previous is None:
-            return None
-        try:
-            return self.current_context_window(previous.runtime_instance_id)
-        except (LookupError, RuntimeError, ValueError):
-            return None
-
-    def _session_context_messages(
-        self,
-        *,
-        session_id: str,
-        through_task_revision: int,
-        canonical_messages: list[ConversationMessage] | None = None,
-        runtime_role: str = "main",
-    ) -> list[BaseMessage]:
-        if runtime_role != "main":
-            return conversation_to_graph_messages(list(canonical_messages or []))
-        snapshot = self._context_snapshots.latest(session_id)
-        if snapshot is None or snapshot.through_task_revision > through_task_revision:
-            source_messages = canonical_messages
-            if source_messages is None:
-                source_messages = self._conversations.messages_through_task_revision(
-                    session_id=session_id,
-                    task_revision=through_task_revision,
-                )
-            return conversation_to_graph_messages(source_messages)
-        delta = self._conversations.messages_between_task_revisions(
-            session_id=session_id,
-            after_task_revision=snapshot.through_task_revision,
-            through_task_revision=through_task_revision,
-        )
-        return [
-            *messages_from_dict(list(snapshot.graph_messages)),
-            *conversation_to_graph_messages([message for message in delta if message.message_id not in snapshot.included_user_message_ids]),
-        ]
-
-    def _execution_context_snapshot(
-        self, instance: RuntimeInstance, *, state: RuntimeState, messages: list[Any], status: str,
-    ) -> ConversationContextSnapshot | None:
-        if instance.request.runtime_role != "main" or status not in {"completed", "failed", "cancelled"}:
-            return None
-        previous = self._context_snapshots.latest(instance.request.session_id)
-        if previous is None and not any(
-            is_context_summary_message(message)
-            or message.additional_kwargs.get("kind") == "runtime_steered_input"
-            for message in messages
-        ):
-            return None
-        included = set(previous.included_user_message_ids if previous else ())
-        included.update(represented_input_message_ids(messages))
-        return ConversationContextSnapshot(
-            session_id=instance.request.session_id,
-            principal_id=instance.request.principal_id,
-            through_task_revision=instance.request.task_revision,
-            graph_messages=tuple(messages_to_dict(messages)),
-            included_user_message_ids=tuple(sorted(included)),
-            context_window=_latest_context_window(state, graph_messages=messages) or {},
-            compression_report=state.context.compression_report or (previous.compression_report if previous else {}),
-        )
-
     def _runtime_input(
         self,
         instance: RuntimeInstance,
@@ -852,41 +546,6 @@ class DynamicRuntimeService:
             raise RuntimeError("delegated task runtime request changed after task creation")
         message = _delegated_task_message(instance, record.envelope)
         return [message], message
-
-    def _resolve_frozen_model(self, instance: RuntimeInstance):
-        frozen = instance.request.policy_snapshot.model
-        resolved = self._model_resolver.resolve_chat_model(
-            operation=frozen.operation,
-            profile_id=frozen.profile_id,
-            expected_profile_revision=frozen.profile_revision,
-            expected_credential_revision=frozen.credential_revision,
-            reasoning_intensity=instance.request.policy_snapshot.reasoning_intensity,
-            session_id=instance.request.session_id,
-        )
-        if resolved.snapshot != frozen:
-            raise RuntimeError("resolved model does not match the runtime policy snapshot")
-        return resolved
-
-    def _resolve_frozen_compression_model(
-        self,
-        instance: RuntimeInstance,
-        *,
-        fallback: Any,
-    ):
-        frozen = instance.request.policy_snapshot.compression_model
-        if frozen is None:
-            return fallback
-        resolved = self._model_resolver.resolve_chat_model(
-            operation=frozen.operation,
-            profile_id=frozen.profile_id,
-            expected_profile_revision=frozen.profile_revision,
-            expected_credential_revision=frozen.credential_revision,
-            session_id=instance.request.session_id,
-        )
-        if resolved.snapshot != frozen:
-            raise RuntimeError("resolved compression model does not match the runtime policy snapshot")
-        return resolved
-
 
 def _initial_state(
     *,
@@ -966,26 +625,6 @@ def _inherited_token_budget(context_window: dict[str, Any] | None) -> dict[str, 
     return inherited
 
 
-def _manual_compression_context_window(
-    *,
-    messages: list[Any],
-    limits: dict[str, Any],
-    model_role: str,
-) -> dict[str, Any]:
-    message_tokens = estimate_messages_tokens(messages)
-    window = context_window_payload(
-        node_id="manual_context_compression",
-        token_count=message_tokens,
-        token_count_method="text_estimation",
-        compression_threshold_tokens=limits.get("compression_threshold_tokens"),
-        context_window_tokens=limits.get("context_window_tokens"),
-        model_role=model_role,
-        source="context_system.manual_compression",
-    )
-    window["current_message_token_estimate"] = message_tokens
-    return window
-
-
 def _current_user_message(
     instance: RuntimeInstance,
     messages: list[ConversationMessage],
@@ -1057,27 +696,6 @@ def _validate_invocation_status(instance: RuntimeInstance, *, resuming: bool) ->
         )
 
 
-def _interrupt_payloads(*, raw: Any, checkpoint: Any) -> list[dict[str, Any]]:
-    values: list[Any] = []
-    if isinstance(raw, dict):
-        values.extend(list(raw.get("__interrupt__") or []))
-    for task in list(getattr(checkpoint, "tasks", ()) or ()):
-        values.extend(list(getattr(task, "interrupts", ()) or ()))
-    payloads: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in values:
-        value = getattr(item, "value", item)
-        payload = dict(value) if isinstance(value, dict) else {"value": value}
-        interrupt_id = str(getattr(item, "id", "") or "").strip()
-        if interrupt_id:
-            payload["interrupt_id"] = interrupt_id
-        marker = repr(sorted(payload.items(), key=lambda pair: str(pair[0])))
-        if marker not in seen:
-            seen.add(marker)
-            payloads.append(payload)
-    return payloads
-
-
 def _graph_resume_values(payload: dict[str, Any]) -> dict[str, Any]:
     interrupt_id = str(payload.get("interrupt_id") or "").strip()
     decision = str(payload.get("decision") or "").strip()
@@ -1141,7 +759,7 @@ def _delegated_delivery_error(
 ) -> str | None:
     if instance.request.runtime_role != "temporary" or status != "completed":
         return None
-    final_content = _final_graph_message_content(graph_messages)
+    final_content = final_graph_message_content(graph_messages)
     rendered = json.dumps(final_content, ensure_ascii=False) if not isinstance(final_content, str) else final_content
     if "DSML" in rendered and "tool_calls" in rendered:
         return "Temporary agent returned serialized tool markup instead of a native tool call."
@@ -1158,435 +776,13 @@ def _delegated_delivery_error(
     return None
 
 
-def _close_terminal_tool_calls(
-    graph_messages: list[BaseMessage],
-    *,
-    status: RuntimeExecutionStatus,
-) -> list[BaseMessage]:
-    result_status = "cancelled" if status == "cancelled" else "failed"
-    error_code = "runtime_cancelled" if status == "cancelled" else "runtime_terminal_before_tool_result"
-    return close_incomplete_tool_call_messages(
-        graph_messages,
-        status=result_status,
-        error_code=error_code,
-    )
-
-
-def _tool_call_records(
-    messages: list[ConversationMessage],
-    *,
-    instance: RuntimeInstance,
-    waiting_status: RuntimeExecutionStatus,
-    observations: list[dict[str, Any]],
-) -> tuple[ToolCallRecord, ...]:
-    if instance.attempt_id is None:
-        raise RuntimeError("claimed runtime instance has no attempt identity")
-    records: dict[str, dict[str, Any]] = {}
-    event_times = _tool_event_times(observations)
-    for message in messages:
-        for part in message.parts:
-            if isinstance(part, ToolCallPart):
-                initial_status = (
-                    "waiting_approval"
-                    if waiting_status == "waiting_approval"
-                    else "running"
-                    if waiting_status == "waiting_external"
-                    else "proposed"
-                )
-                observed = event_times.get(part.tool_call_id, {})
-                records[part.tool_call_id] = {
-                    "tool_call_id": part.tool_call_id,
-                    "runtime_instance_id": instance.runtime_instance_id,
-                    "request_id": instance.request.request_id,
-                    "turn_id": instance.request.turn_id,
-                    "attempt_id": instance.attempt_id,
-                    "capability_id": part.capability_id,
-                    "capability_revision": part.capability_revision,
-                    "model_alias": part.model_alias,
-                    "display_alias": observed.get("display_alias") or part.model_alias,
-                    "arguments": dict(part.arguments),
-                    "status": initial_status,
-                    "created_at": observed.get("requested_at") or message.created_at,
-                    "updated_at": observed.get("started_at") or observed.get("requested_at") or message.created_at,
-                    "started_at": observed.get("started_at"),
-                    "completed_at": None,
-                }
-            elif isinstance(part, ToolResultPart):
-                record = records.get(part.tool_call_id)
-                if record is None:
-                    raise RuntimeError(f"tool result has no projected tool call: {part.tool_call_id}")
-                record["status"] = part.status
-                observed = event_times.get(part.tool_call_id, {})
-                started_at = observed.get("started_at") or part.started_at
-                completed_at = observed.get("completed_at") or part.completed_at or message.created_at
-                record["started_at"] = started_at
-                record["completed_at"] = completed_at
-                record["updated_at"] = completed_at
-                if part.status == "completed":
-                    record["result"] = dict(part.output or {})
-                else:
-                    if part.output:
-                        record["result"] = dict(part.output)
-                    record["error_code"] = part.error_code
-    return tuple(ToolCallRecord.model_validate(record) for record in records.values())
-
-
-def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    event_times: dict[str, dict[str, str]] = {}
-    for observation in observations:
-        event_type = str(observation.get("event_type") or "")
-        if event_type not in {
-            "tool_proposed",
-            "tool_started",
-            "tool_completed",
-            "tool_failed",
-            "tool_contract_invalid",
-        }:
-            continue
-        payload = observation.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        tool_call_id = str(payload.get("tool_call_id") or "").strip()
-        created_at = str(observation.get("created_at") or "").strip()
-        if not tool_call_id or not created_at:
-            continue
-        times = event_times.setdefault(tool_call_id, {})
-        observed_tool_id = str(payload.get("tool_id") or payload.get("tool_name") or "").strip()
-        if observed_tool_id:
-            times["display_alias"] = observed_tool_id
-        if event_type == "tool_proposed":
-            times.setdefault("requested_at", created_at)
-        elif event_type == "tool_started":
-            times.setdefault("started_at", created_at)
-        else:
-            times["completed_at"] = created_at
-    return event_times
-
-
-def _model_message_created_at(observations: list[dict[str, Any]]) -> dict[str, str]:
-    timestamps: dict[str, str] = {}
-    for observation in observations:
-        if str(observation.get("event_type") or "") != "model_call_started":
-            continue
-        payload = observation.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        stream_id = str(payload.get("stream_id") or "").strip()
-        created_at = str(observation.get("created_at") or "").strip()
-        if stream_id and created_at:
-            timestamps.setdefault(stream_id, created_at)
-    return timestamps
-
-
-def _drain_runtime_observations(manager: Any, *, state: RuntimeState) -> list[dict[str, Any]]:
-    drain = getattr(manager, "drain_durable_events", None)
-    if not callable(drain):
-        raise RuntimeError("runtime observability manager cannot drain execution observations")
-    events = drain(
-        trace_id=state.observability.trace_id,
-        run_id=state.run.run_id,
-    )
-    return [event.model_dump(mode="json") for event in events]
-
-
-def _model_usage_records(
-    instance: RuntimeInstance,
-    observations: list[dict[str, Any]],
-) -> tuple[RuntimeModelUsage, ...]:
-    if instance.attempt_id is None:
-        raise RuntimeError("runtime model usage requires a claimed attempt identity")
-    request = instance.request
-    frozen_model = request.policy_snapshot.model
-    records: list[RuntimeModelUsage] = []
-    for observation in observations:
-        if str(observation.get("event_type") or "") != "model_usage_completed":
-            continue
-        payload = observation.get("payload")
-        if not isinstance(payload, dict):
-            raise RuntimeError("model usage observation payload must be an object")
-        if str(payload.get("version") or "") != "runtime_model_usage_observation.v1":
-            raise RuntimeError("model usage observation uses an unsupported schema")
-        observed_model = (
-            str(payload.get("model_operation") or ""),
-            str(payload.get("model_profile_id") or ""),
-            int(payload.get("model_profile_revision") or 0),
-            str(payload.get("provider") or ""),
-            str(payload.get("model_name") or ""),
-        )
-        frozen_identity = (
-            frozen_model.operation,
-            frozen_model.profile_id,
-            frozen_model.profile_revision,
-            frozen_model.provider,
-            frozen_model.model_name,
-        )
-        if observed_model != frozen_identity:
-            raise RuntimeError("model usage observation differs from the frozen model selection")
-        records.append(
-            RuntimeModelUsage(
-                observation_event_id=str(observation.get("event_id") or ""),
-                principal_id=request.principal_id,
-                request_id=request.request_id,
-                runtime_instance_id=instance.runtime_instance_id,
-                attempt_id=instance.attempt_id,
-                session_id=request.session_id,
-                turn_id=request.turn_id,
-                workspace_id=request.workspace_id,
-                task_revision=request.task_revision,
-                runtime_role=request.runtime_role,
-                strategy=request.strategy,
-                node_id=str(payload.get("node_id") or ""),
-                model_operation=frozen_model.operation,
-                model_profile_id=frozen_model.profile_id,
-                model_profile_revision=frozen_model.profile_revision,
-                provider=frozen_model.provider,
-                model_name=frozen_model.model_name,
-                input_tokens=int(payload.get("input_tokens") or 0),
-                output_tokens=int(payload.get("output_tokens") or 0),
-                total_tokens=int(payload.get("total_tokens") or 0),
-                reasoning_tokens=int(payload.get("reasoning_tokens") or 0),
-                cache_read_tokens=int(payload.get("cache_read_tokens") or 0),
-                cache_write_tokens=int(payload.get("cache_write_tokens") or 0),
-                usage_source=str(payload.get("usage_source") or "provider_usage"),
-                created_at=str(observation.get("created_at") or ""),
-            )
-        )
-    return tuple(records)
-
-
-def _event_payload(
-    instance: RuntimeInstance,
-    *,
-    state: RuntimeState,
-    status: RuntimeExecutionStatus,
-    interrupts: list[dict[str, Any]],
-    error: RuntimeErrorEnvelope | None,
-    graph_messages: list[BaseMessage],
-    conversation_messages: list[ConversationMessage],
-    tool_calls: tuple[ToolCallRecord, ...],
-) -> dict[str, Any]:
-    if status in {"waiting_approval", "waiting_external"}:
-        source = (
-            {
-                "task_id": instance.request.task_id,
-                "parent_runtime_instance_id": instance.request.parent_runtime_instance_id,
-                "runtime_role": instance.request.runtime_role,
-            }
-            if instance.request.runtime_role == "temporary"
-            else {"runtime_role": instance.request.runtime_role}
-        )
-        return {
-            "kind": f"runtime_{status}",
-            "status": status,
-            "details": {
-                "interrupts": _json_safe(interrupts),
-                "source": source,
-            },
-        }
-    if status == "completed":
-        assistant_message = next(
-            (message for message in reversed(conversation_messages) if message.role == "assistant"),
-            None,
-        )
-        final_content = _final_graph_message_content(graph_messages)
-        result = (
-            {
-                "summary": final_content,
-                "verified": True,
-                "tool_evidence": [
-                    {
-                        "tool": record.model_alias,
-                        "status": record.status,
-                        "result": record.result,
-                    }
-                    for record in tool_calls
-                ],
-            }
-            if instance.request.runtime_role == "temporary"
-            else final_content
-        )
-        return {
-            "kind": "runtime_completed",
-            "status": "completed",
-            "result": result,
-            "message": (
-                {
-                    "message_id": assistant_message.message_id,
-                    "parts": [part.model_dump(mode="json") for part in assistant_message.parts],
-                    "created_at": assistant_message.created_at,
-                }
-                if assistant_message is not None
-                else None
-            ),
-            "context_window": _latest_context_window(state),
-        }
-    if error is None:
-        raise RuntimeError(f"terminal runtime status requires an error envelope: {status}")
-    return {"kind": status, "error": error.model_dump(mode="json")}
-
-
-def _latest_context_window(
-    state: RuntimeState,
-    *,
-    graph_messages: list[Any] | None = None,
-) -> dict[str, Any] | None:
-    persisted = _context_window_from_token_budget(state, graph_messages=graph_messages)
-    observed = _latest_observed_context_window(state)
-    if persisted is not None:
-        return _recompute_context_window_ratios(
-            {
-                **(observed or {}),
-                **{
-                    key: value
-                    for key, value in persisted.items()
-                    if value is not None
-                },
-                "compression_status": _latest_compression_status(state),
-            }
-        )
-    if observed is not None:
-        return _recompute_context_window_ratios(
-            {
-                **observed,
-                "compression_status": _latest_compression_status(state),
-            }
-        )
-    return None
-
-
-def _latest_observed_context_window(state: RuntimeState) -> dict[str, Any] | None:
-    merged: dict[str, Any] = {}
-    for raw_event in reversed(state.observability.events):
-        if not isinstance(raw_event, dict) or raw_event.get("event_type") != "context_window_updated":
-            continue
-        payload = raw_event.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        for key, value in payload.items():
-            if key == "event_type" or value is None or key in merged:
-                continue
-            merged[key] = _json_safe(value)
-    return merged or None
-
-
-def _latest_compression_status(state: RuntimeState) -> str | None:
-    statuses = {
-        "context_compression_started": "running",
-        "context_compression_completed": "completed",
-        "context_compression_failed": "failed",
-    }
-    for raw_event in reversed(state.observability.events):
-        if not isinstance(raw_event, dict):
-            continue
-        event_type = str(raw_event.get("event_type") or "")
-        if event_type in statuses:
-            return statuses[event_type]
-    return None
-
-
-def _context_window_from_token_budget(
-    state: RuntimeState,
-    *,
-    graph_messages: list[Any] | None = None,
-) -> dict[str, Any] | None:
-    token_budget = dict(getattr(state.context, "token_budget", {}) or {})
-    token_count = token_budget.get("token_count")
-    if token_count is None:
-        token_count = (
-            token_budget.get("effective_context_tokens")
-            or token_budget.get("last_provider_context_tokens_after_call")
-        )
-    token_count_method = (
-        token_budget.get("token_count_method")
-        or token_budget.get("last_provider_token_count_method")
-    )
-    source = (
-        token_budget.get("source")
-        or token_budget.get("effective_context_source")
-    )
-    baseline_message_tokens = _non_negative_int(
-        token_budget.get("last_provider_message_tokens_after_call")
-    )
-    normalized_token_count = _non_negative_int(token_count)
-    current_message_tokens = (
-        estimate_messages_tokens(graph_messages)
-        if graph_messages is not None
-        else None
-    )
-    if (
-        normalized_token_count is not None
-        and baseline_message_tokens is not None
-        and graph_messages is not None
-    ):
-        normalized_token_count = max(
-            0,
-            normalized_token_count + current_message_tokens - baseline_message_tokens,
-        )
-        token_count_method = f"{token_count_method or 'provider_usage'}_current_context"
-        source = "runtime_checkpoint.current_context"
-    if normalized_token_count is not None:
-        return {
-            "token_count": normalized_token_count,
-            "context_window_tokens": _json_safe(token_budget.get("context_window_tokens")),
-            "compression_threshold_tokens": _json_safe(token_budget.get("compression_threshold_tokens")),
-            "token_count_method": _json_safe(token_count_method),
-            "source": _json_safe(source),
-            "model_role": _json_safe(
-                token_budget.get("model_role")
-                or token_budget.get("last_provider_model_role")
-            ),
-            "node_id": _json_safe(
-                token_budget.get("node_id")
-                or token_budget.get("last_provider_node_id")
-            ),
-            "current_message_token_estimate": current_message_tokens,
-        }
-    return None
-
-
-def _recompute_context_window_ratios(window: dict[str, Any]) -> dict[str, Any]:
-    """Derive ratios from the final count and active limits.
-
-    Observation events are append-only and may have been produced by a
-    previous runtime model.  Their ratios are therefore presentation data, not
-    authoritative state.  Recomputing here prevents an old threshold from
-    surviving a model switch.
-    """
-    result = dict(window)
-    token_count = _non_negative_int(result.get("token_count"))
-    context_window_tokens = _positive_int(result.get("context_window_tokens"))
-    compression_threshold_tokens = _positive_int(result.get("compression_threshold_tokens"))
-    if token_count is not None and context_window_tokens:
-        result["window_usage_ratio"] = min(
-            float(token_count) / float(context_window_tokens),
-            1.0,
-        )
-    else:
-        result.pop("window_usage_ratio", None)
-    if token_count is not None and compression_threshold_tokens:
-        result["compression_usage_ratio"] = min(
-            float(token_count) / float(compression_threshold_tokens),
-            1.0,
-        )
-    else:
-        result.pop("compression_usage_ratio", None)
-    return result
-
-
-def _final_graph_message_content(messages: list[BaseMessage]) -> Any:
-    for message in reversed(messages):
-        if getattr(message, "type", "") in {"ai", "assistant"}:
-            return _json_safe(getattr(message, "content", ""))
-    raise RuntimeError("completed runtime has no assistant result message")
-
-
 def _terminal_error(
     instance: RuntimeInstance,
     *,
     status: RuntimeExecutionStatus,
     state: RuntimeState,
 ) -> RuntimeErrorEnvelope | None:
-    if status not in {"failed", "cancelled"}:
+    if status != "failed" and status != "cancelled":
         return None
     cancelled = status == "cancelled"
     return RuntimeErrorEnvelope(
@@ -1638,25 +834,6 @@ def _exception_error(instance: RuntimeInstance, exc: Exception) -> RuntimeErrorE
             "message": str(exc).strip() or name,
         },
     )
-
-
-def _json_safe(value: Any) -> Any:
-    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-
-
-def _non_negative_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def _positive_int(value: Any) -> int | None:
-    parsed = _non_negative_int(value)
-    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _run_graph_with_control(

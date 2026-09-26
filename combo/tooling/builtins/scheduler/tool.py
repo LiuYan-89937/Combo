@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.control_plane_store import WorkspaceSchedulerStore
-from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.runtime_protocol import RuntimeExecutionIdentity
+from combo.tooling.builtins.runtime_ports import SchedulerRuntimePort
 from combo.tooling.builtins.scheduler.specs import (
     RUNTIME_IDENTITY_RESOURCE,
     SCHEDULER_RUNTIME_RESOURCE,
@@ -26,7 +25,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     store = resources.get(SCHEDULER_RUNTIME_RESOURCE)
     identity = resources.get(RUNTIME_IDENTITY_RESOURCE)
-    if not isinstance(store, WorkspaceSchedulerStore):
+    if not isinstance(store, SchedulerRuntimePort):
         raise RuntimeError("scheduler runtime is not configured")
     identity = _require_main(identity)
     action = str(arguments.get("action") or "").strip()
@@ -38,7 +37,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         schedule_type = _required_text(arguments, "schedule_type")
         schedule_expr = _required_text(arguments, "schedule_expr")
         timezone = _required_text(arguments, "timezone")
-        validate_schedule(schedule_type, schedule_expr, timezone)
         output = {
             "action": action,
             "job": store.create_job({
@@ -50,7 +48,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 "timezone": timezone,
                 "strategy": str(arguments.get("strategy") or "auto"),
                 "approval_policy": str(arguments.get("approval_policy") or "ask"),
-                "execution_mode": validate_execution_mode(arguments.get("execution_mode")),
+                "execution_mode": arguments.get("execution_mode"),
             }),
         }
     elif action in {"pause", "resume", "delete"}:
@@ -64,7 +62,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 
 def _owned_job(
-    store: WorkspaceSchedulerStore,
+    store: SchedulerRuntimePort,
     identity: RuntimeExecutionIdentity,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:

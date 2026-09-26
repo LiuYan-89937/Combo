@@ -6,7 +6,7 @@ from typing import Any
 from combo.model_pool.store import ModelPoolStore
 from combo.model_pool.headers import credential_header_variables, render_credential_headers
 from combo.model_pool.runtime_profile import resolve_model_pool_provider_profile
-from combo.models import ChatModelSettings
+from combo.models.chat_model import ChatModelSettings
 from combo.models.chat_model import create_chat_model_from_settings
 from combo.models.protocol import ModelReasoningSettings
 from combo.models.reasoning import apply_reasoning_intensity
@@ -17,6 +17,7 @@ from combo.runtime_protocol import (
     ModelOperationKind,
     ModelSelectionSnapshot,
     RuntimePolicySnapshot,
+    RuntimeInstance,
     UserRuntimePolicy,
 )
 
@@ -44,6 +45,40 @@ class RuntimeModelResolver:
 
     def __init__(self, store: ModelPoolStore) -> None:
         self._store = store
+
+    def resolve_for_instance(self, instance: RuntimeInstance) -> ResolvedRuntimeChatModel:
+        frozen = instance.request.policy_snapshot.model
+        resolved = self.resolve_chat_model(
+            operation=frozen.operation,
+            profile_id=frozen.profile_id,
+            expected_profile_revision=frozen.profile_revision,
+            expected_credential_revision=frozen.credential_revision,
+            reasoning_intensity=instance.request.policy_snapshot.reasoning_intensity,
+            session_id=instance.request.session_id,
+        )
+        if resolved.snapshot != frozen:
+            raise RuntimeError("resolved model does not match the runtime policy snapshot")
+        return resolved
+
+    def resolve_compression_for_instance(
+        self,
+        instance: RuntimeInstance,
+        *,
+        fallback: ResolvedRuntimeChatModel,
+    ) -> ResolvedRuntimeChatModel:
+        frozen = instance.request.policy_snapshot.compression_model
+        if frozen is None:
+            return fallback
+        resolved = self.resolve_chat_model(
+            operation=frozen.operation,
+            profile_id=frozen.profile_id,
+            expected_profile_revision=frozen.profile_revision,
+            expected_credential_revision=frozen.credential_revision,
+            session_id=instance.request.session_id,
+        )
+        if resolved.snapshot != frozen:
+            raise RuntimeError("resolved compression model does not match the runtime policy snapshot")
+        return resolved
 
     def resolve_chat_model(
         self,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import ClassVar, Literal, Protocol
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
@@ -110,17 +110,9 @@ class CapabilityRuntimeProjection(FrozenProtocolModel):
 
 
 class CapabilityAdapter(Protocol):
-    @property
-    def kind(self) -> CapabilityKind:
-        ...
-
-    @property
-    def adapter_id(self) -> str:
-        ...
-
-    @property
-    def adapter_revision(self) -> str:
-        ...
+    kind: ClassVar[CapabilityKind]
+    adapter_id: ClassVar[str]
+    adapter_revision: ClassVar[str]
 
     def validate(self, draft: CapabilityDraft) -> CapabilityAdapterValidation:
         ...

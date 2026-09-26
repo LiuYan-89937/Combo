@@ -5,7 +5,13 @@ from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import threading
 import time
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Protocol
+
+from combo.runtime_protocol.interruption import (
+    RuntimeModelGenerationInterrupted,
+    RuntimeToolExecutionCancelled,
+    RuntimeToolExecutionTimedOut,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +28,28 @@ class ToolApprovalOverride:
     reason: str
 
 
+class RuntimeRunControlPort(Protocol):
+    @property
+    def drain_requested(self) -> bool: ...
+
+    @property
+    def drain_reason(self) -> str | None: ...
+
+    @property
+    def tool_interrupt_requested(self) -> bool: ...
+
+    @property
+    def tool_interrupt_reason(self) -> str | None: ...
+
+    def consume_inputs(self) -> tuple[Any, ...]: ...
+    def acknowledge_checkpointed_inputs(self, messages: list[Any]) -> tuple[str, ...]: ...
+    def begin_model_generation(self) -> int: ...
+    def generation_is_current(self, revision: int) -> bool: ...
+    def register_model_cancellation(self, callback: Callable[[], None]) -> Callable[[], None]: ...
+    def register_tool_cancellation(self, callback: Callable[[], None]) -> Callable[[], None]: ...
+    def clear_tool_interrupt(self) -> None: ...
+
+
 _CURRENT_TOOL_CALL: ContextVar[CurrentToolCall | None] = ContextVar(
     "combo_current_tool_call",
     default=None,
@@ -34,7 +62,7 @@ _TOOL_OUTPUT_SESSION_ID: ContextVar[str | None] = ContextVar(
     "combo_tool_output_session_id",
     default=None,
 )
-_RUNTIME_RUN_CONTROL: ContextVar[Any | None] = ContextVar(
+_RUNTIME_RUN_CONTROL: ContextVar[RuntimeRunControlPort | None] = ContextVar(
     "combo_runtime_run_control",
     default=None,
 )
@@ -42,37 +70,6 @@ _TOOL_CANCELLATION_SCOPE: ContextVar["ToolCancellationScope | None"] = ContextVa
     "combo_tool_cancellation_scope",
     default=None,
 )
-
-
-class RuntimeToolExecutionCancelled(RuntimeError):
-    pass
-
-
-class RuntimeToolExecutionTimedOut(TimeoutError):
-    pass
-
-
-class RuntimeModelGenerationInterrupted(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        partial_text: str = "",
-        reasoning_content: str = "",
-        partial_tool_calls: tuple[dict[str, Any], ...] = (),
-        stream_id: str = "",
-        input_injections: tuple[Any, ...] = (),
-    ) -> None:
-        super().__init__(message)
-        self.partial_text = str(partial_text or "")
-        self.reasoning_content = str(reasoning_content or "")
-        self.partial_tool_calls = tuple(
-            dict(call)
-            for call in (partial_tool_calls or ())
-            if isinstance(call, dict)
-        )
-        self.stream_id = str(stream_id or "").strip()
-        self.input_injections = tuple(input_injections or ())
 
 
 class ToolCancellationScope:
@@ -166,7 +163,7 @@ def tool_output_session_context(session_id: str) -> Iterator[None]:
 
 
 @contextmanager
-def runtime_run_control_context(control: Any | None) -> Iterator[None]:
+def runtime_run_control_context(control: RuntimeRunControlPort | None) -> Iterator[None]:
     token = _RUNTIME_RUN_CONTROL.set(control)
     try:
         yield
@@ -191,18 +188,18 @@ def current_tool_output_session_id() -> str | None:
     return _TOOL_OUTPUT_SESSION_ID.get()
 
 
-def current_runtime_run_control() -> Any | None:
+def current_runtime_run_control() -> RuntimeRunControlPort | None:
     return _RUNTIME_RUN_CONTROL.get()
 
 
 def runtime_terminal_cancellation_requested() -> bool:
     control = current_runtime_run_control()
-    return bool(control is not None and getattr(control, "drain_requested", False))
+    return control.drain_requested if control is not None else False
 
 
 def runtime_tool_interruption_requested() -> bool:
     control = current_runtime_run_control()
-    return bool(control is not None and getattr(control, "tool_interrupt_requested", False))
+    return control.tool_interrupt_requested if control is not None else False
 
 
 def runtime_tool_cancellation_requested() -> bool:
@@ -212,10 +209,7 @@ def runtime_tool_cancellation_requested() -> bool:
 
 def consume_runtime_inputs() -> tuple[Any, ...]:
     control = current_runtime_run_control()
-    consume = getattr(control, "consume_inputs", None)
-    if not callable(consume):
-        return ()
-    return tuple(consume())
+    return control.consume_inputs() if control is not None else ()
 
 
 def acknowledge_runtime_inputs(messages: list[Any]) -> None:
@@ -226,10 +220,9 @@ def acknowledge_runtime_inputs(messages: list[Any]) -> None:
 
 def begin_runtime_model_generation() -> int:
     control = current_runtime_run_control()
-    begin = getattr(control, "begin_model_generation", None)
-    if callable(begin):
+    if control is not None:
         try:
-            return int(begin())
+            return control.begin_model_generation()
         except RuntimeError as exc:
             raise RuntimeModelGenerationInterrupted(str(exc)) from exc
     return 0
@@ -237,18 +230,12 @@ def begin_runtime_model_generation() -> int:
 
 def runtime_model_generation_is_current(revision: int) -> bool:
     control = current_runtime_run_control()
-    current = getattr(control, "generation_is_current", None)
-    return bool(current(revision)) if callable(current) else True
+    return control.generation_is_current(revision) if control is not None else True
 
 
 def register_runtime_model_cancellation(callback: Callable[[], None]) -> Callable[[], None]:
     control = current_runtime_run_control()
-    register = getattr(control, "register_model_cancellation", None)
-    if callable(register):
-        return register(callback)
-    if control is not None and bool(getattr(control, "drain_requested", False)):
-        callback()
-    return lambda: None
+    return control.register_model_cancellation(callback) if control is not None else lambda: None
 
 
 def execute_runtime_model_invocation(operation: Callable[[], Any], *, revision: int) -> Any:
@@ -290,12 +277,14 @@ def register_runtime_tool_cancellation(callback: Callable[[], None]) -> Callable
     local_scope = _TOOL_CANCELLATION_SCOPE.get()
     unregister_local = local_scope.register(callback) if local_scope is not None else lambda: None
     control = current_runtime_run_control()
-    register = getattr(control, "register_tool_cancellation", None)
-    if callable(register):
-        unregister_runtime = register(callback)
-        return lambda: (unregister_runtime(), unregister_local())
-    if control is not None and bool(getattr(control, "drain_requested", False)):
-        callback()
+    if control is not None:
+        unregister_runtime = control.register_tool_cancellation(callback)
+
+        def unregister() -> None:
+            unregister_runtime()
+            unregister_local()
+
+        return unregister
     return unregister_local
 
 
@@ -316,8 +305,8 @@ def execute_with_runtime_cancellation(
         raise ValueError("tool timeout_seconds must be positive")
     control = current_runtime_run_control()
     if control is not None and (
-        bool(getattr(control, "drain_requested", False))
-        or bool(getattr(control, "tool_interrupt_requested", False))
+        control.drain_requested
+        or control.tool_interrupt_requested
     ):
         raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
 
@@ -357,16 +346,16 @@ def execute_with_runtime_cancellation(
             if cancelled.wait(timeout=min(0.05, remaining) if remaining is not None else 0.05) or (
                 control is not None
                 and (
-                    bool(getattr(control, "drain_requested", False))
-                    or bool(getattr(control, "tool_interrupt_requested", False))
+                    control.drain_requested
+                    or control.tool_interrupt_requested
                 )
             ):
                 raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
         if cancelled.is_set() or (
             control is not None
             and (
-                bool(getattr(control, "drain_requested", False))
-                or bool(getattr(control, "tool_interrupt_requested", False))
+                control.drain_requested
+                or control.tool_interrupt_requested
             )
         ):
             raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
@@ -376,15 +365,10 @@ def execute_with_runtime_cancellation(
         return outcome.get("value")
     finally:
         unregister()
-        clear_interrupt = getattr(control, "clear_tool_interrupt", None)
-        if callable(clear_interrupt):
-            clear_interrupt()
+        if control is not None:
+            control.clear_tool_interrupt()
 
 
-def _runtime_cancel_reason(control: Any) -> str:
-    reason = str(
-        getattr(control, "drain_reason", None)
-        or getattr(control, "tool_interrupt_reason", None)
-        or "user_cancelled"
-    )
-    return f"Tool execution cancelled: {reason}"
+def _runtime_cancel_reason(control: RuntimeRunControlPort | None) -> str:
+    reason = (control.drain_reason or control.tool_interrupt_reason) if control is not None else None
+    return f"Tool execution cancelled: {reason or 'user_cancelled'}"

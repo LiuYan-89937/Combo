@@ -6,6 +6,7 @@ from typing import Any
 from combo.model_pool.schema import (
     ModelPoolCredential,
     ModelPoolProfile,
+    ModelSelectionCandidate,
     ModelSelectionRecommendation,
     ModelSelectionRequirement,
     ModelSelectionRequest,
@@ -190,17 +191,17 @@ def _missing_capabilities(requirement: ModelSelectionRequirement, profile: Model
     return missing
 
 
-def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
-    return {
-        "profile_id": candidate.profile.profile_id,
-        "display_name": candidate.profile.display_name,
-        "description": candidate.profile.description,
-        "provider": candidate.profile.provider,
-        "model_name": candidate.profile.model_name,
-        "score": round(candidate.score, 6),
-        "reason": candidate.reason,
-        "warnings": candidate.warnings,
-    }
+def _candidate_payload(candidate: _Candidate) -> ModelSelectionCandidate:
+    return ModelSelectionCandidate(
+        profile_id=candidate.profile.profile_id,
+        display_name=candidate.profile.display_name,
+        description=candidate.profile.description,
+        provider=candidate.profile.provider,
+        model_name=candidate.profile.model_name,
+        score=round(candidate.score, 6),
+        reason=candidate.reason,
+        warnings=candidate.warnings,
+    )
 
 
 def _score_profile(requirement: ModelSelectionRequirement, profile: ModelPoolProfile) -> float:

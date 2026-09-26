@@ -15,7 +15,7 @@
       :class="[
         `floating-${item.id}`,
         `side-${position(item.id).side}`,
-        { 'is-hidden': item.id === 'plan' && !runtimeStore.currentPlan },
+        { 'is-hidden': (item.id === 'plan' && !runtimeStore.currentPlan) || (item.id === 'outline' && !showOutline) },
         { 'is-dragging': draggingId === item.id },
       ]"
       :data-onboarding="item.id === 'sessions' ? 'activity-dock' : undefined"
@@ -42,6 +42,31 @@
           <SessionsSidebarPanel
             @request-new-agent-session="forwardNewAgentSessionRequest"
             @interaction-lock="setSessionsInteractionLock"
+          />
+        </div>
+      </n-popover>
+
+      <n-popover
+        v-else-if="item.id === 'outline'"
+        trigger="click"
+        :show="uiStore.conversationDockPanel === 'outline'"
+        :placement="panelPlacement(item.id)"
+        :show-arrow="false"
+        raw
+        @update:show="setPanelVisibility('outline', $event)"
+      >
+        <template #trigger>
+          <button class="dock-capsule" type="button">
+            <n-icon size="15"><ListOutline /></n-icon>
+            <span>{{ t('outline.capsule') }}</span>
+          </button>
+        </template>
+        <div class="dock-panel outline-panel-shell">
+          <ConversationOutline
+            :entries="outlineEntries"
+            :active-anchor-id="activeAnchorId"
+            @jump="jumpToOutline"
+            @close="uiStore.setConversationDockPanel(null)"
           />
         </div>
       </n-popover>
@@ -79,7 +104,7 @@
             <span>{{ t('status.memory') }}</span>
           </button>
         </template>
-        <div class="dock-panel"><ConversationMemoryPanel /></div>
+        <div class="dock-panel"><ConversationMemoryPanel :workspace-id="workspaceId" /></div>
       </n-popover>
 
       <PlanCapsule
@@ -109,18 +134,20 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ComponentPublicInstance, CSSProperties } from 'vue'
 import { NIcon, NPopover } from 'naive-ui'
-import { ChatbubblesOutline, FolderOpenOutline, SparklesOutline } from '@/components/icons'
+import { ChatbubblesOutline, FolderOpenOutline, ListOutline, SparklesOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore, type ConversationDockPanel } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import SessionsSidebarPanel from '@/components/common/right-sidebar/SessionsSidebarPanel.vue'
 import WorkspaceSidebarPanel from '@/components/common/right-sidebar/WorkspaceSidebarPanel.vue'
 import ConversationMemoryPanel from './ConversationMemoryPanel.vue'
+import ConversationOutline from './ConversationOutline.vue'
+import type { ConversationOutlineEntry } from '@/utils/conversationOutline'
 import BackgroundTaskStack from './BackgroundTaskStack.vue'
 import SchedulerRunCapsules from '@/components/scheduler/SchedulerRunCapsules.vue'
 import PlanCapsule from './PlanCapsule.vue'
 
-type FloatingItemId = 'sessions' | 'workspace' | 'memory' | 'plan'
+type FloatingItemId = 'sessions' | 'outline' | 'workspace' | 'memory' | 'plan'
 type DockSide = 'left' | 'right'
 interface DockPosition { side: DockSide; y: number }
 interface DragState {
@@ -137,9 +164,13 @@ interface DragState {
 defineProps<{
   sessionId?: string | null
   workspaceId?: string | null
+  showOutline?: boolean
+  outlineEntries: ConversationOutlineEntry[]
+  activeAnchorId?: string | null
 }>()
 const emit = defineEmits<{
   requestNewAgentSession: [packageId: string, initialWorkspaceId: string | null]
+  outlineJump: [anchorId: string]
 }>()
 const { t } = useI18n()
 const uiStore = useUiStore()
@@ -152,6 +183,7 @@ const sessionsInteractionLocked = ref(false)
 const positions = ref<Record<FloatingItemId, DockPosition>>(loadPositions())
 const floatingItems: Array<{ id: FloatingItemId }> = [
   { id: 'sessions' },
+  { id: 'outline' },
   { id: 'workspace' },
   { id: 'memory' },
   { id: 'plan' },
@@ -167,6 +199,7 @@ const previewSide = computed<DockSide>(() => {
 function defaultPositions(): Record<FloatingItemId, DockPosition> {
   return {
     sessions: { side: 'left', y: 0.23 },
+    outline: { side: 'left', y: 0.30 },
     workspace: { side: 'left', y: 0.38 },
     memory: { side: 'left', y: 0.47 },
     plan: { side: 'right', y: 0.52 },
@@ -227,6 +260,11 @@ function setSessionsInteractionLock(locked: boolean) {
 function forwardNewAgentSessionRequest(packageId: string, initialWorkspaceId: string | null) {
   uiStore.setConversationDockPanel(null)
   emit('requestNewAgentSession', packageId, initialWorkspaceId)
+}
+
+function jumpToOutline(anchorId: string) {
+  uiStore.setConversationDockPanel(null)
+  emit('outlineJump', anchorId)
 }
 
 function setItemElement(id: FloatingItemId, value: Element | ComponentPublicInstance | null) {
@@ -404,6 +442,7 @@ onBeforeUnmount(() => {
   animation: dock-panel-enter .24s cubic-bezier(.16, 1, .3, 1) both;
 }
 .session-panel-shell { width: min(440px, calc(100vw - 44px)); max-height: min(72vh, 660px); overflow: auto; }
+.outline-panel-shell { width: min(390px, calc(100vw - 44px)); }
 .workspace-panel-shell { width: min(500px, calc(100vw - 44px)); height: min(84vh, 820px); max-height: calc(100vh - 32px); overflow: hidden; }
 @keyframes dock-panel-enter { from { opacity: 0; transform: translateY(7px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .dock-panel { animation: none; } }

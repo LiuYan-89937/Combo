@@ -2,27 +2,37 @@
   <n-scrollbar class="session-history">
     <div v-if="visibleEntries.length" class="history-entries">
       <template v-for="entry in visibleEntries" :key="entry.key">
-        <button
-          v-if="entry.kind === 'workspace'"
-          class="workspace-group"
-          type="button"
-          :aria-expanded="entry.expanded"
-          @click="toggleWorkspace(entry.workspaceId)"
-        >
-          <span class="workspace-folder-icon">
-            <n-icon size="16"><FolderOpenOutline /></n-icon>
-          </span>
-          <span class="workspace-group-copy">
-            <span class="workspace-group-name">{{ entry.name }}</span>
-            <span class="workspace-group-meta">
-              {{ t('sessions.workspaceSessionCount', { count: entry.count }) }}
+        <div v-if="entry.kind === 'workspace'" class="workspace-group-row">
+          <button
+            class="workspace-group"
+            type="button"
+            :aria-expanded="entry.expanded"
+            @click="toggleWorkspace(entry.workspaceId)"
+          >
+            <span class="workspace-folder-icon">
+              <n-icon size="16"><FolderOpenOutline /></n-icon>
             </span>
-          </span>
-          <n-icon class="workspace-chevron" size="14">
-            <ChevronDownOutline v-if="entry.expanded" />
-            <ChevronForwardOutline v-else />
-          </n-icon>
-        </button>
+            <span class="workspace-group-copy">
+              <span class="workspace-group-name">{{ entry.name }}</span>
+              <span class="workspace-group-meta">
+                {{ t('sessions.workspaceSessionCount', { count: entry.count }) }}
+              </span>
+            </span>
+            <n-icon class="workspace-chevron" size="14">
+              <ChevronDownOutline v-if="entry.expanded" />
+              <ChevronForwardOutline v-else />
+            </n-icon>
+          </button>
+          <button
+            type="button"
+            class="workspace-delete"
+            :aria-label="t('sessions.deleteWorkspace')"
+            :title="t('sessions.deleteWorkspace')"
+            @click="emit('deleteWorkspace', entry.workspaceId, entry.name, entry.rootKind)"
+          >
+            <n-icon size="15"><TrashOutline /></n-icon>
+          </button>
+        </div>
 
         <div
           v-else
@@ -133,6 +143,7 @@ type VisibleEntry =
       workspaceId: string
       name: string
       count: number
+      rootKind: 'managed' | 'linked'
       expanded: boolean
     }
   | {
@@ -157,6 +168,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   select: [session: SessionHistoryItem]
   delete: [session: SessionHistoryItem]
+  deleteWorkspace: [workspaceId: string, name: string, rootKind: 'managed' | 'linked']
 }>()
 
 const { locale, t } = useI18n()
@@ -189,6 +201,7 @@ const visibleEntries = computed<VisibleEntry[]>(() => {
       workspaceId: entry.workspaceId,
       name: entry.name,
       count: entry.sessions.length,
+      rootKind: entry.sessions[0]?.workspace?.root_kind || 'linked',
       expanded,
     }
     if (!expanded) return [header]
@@ -284,6 +297,7 @@ watch([() => props.activeSessionId, groupedSessions], expandActiveWorkspace, { i
   cursor: pointer;
 }
 
+.workspace-group-row { position: relative; }
 .workspace-group {
   display: flex;
   align-items: center;
@@ -296,6 +310,10 @@ watch([() => props.activeSessionId, groupedSessions], expandActiveWorkspace, { i
   box-shadow: 0 5px 14px color-mix(in srgb, var(--app-text) 5%, transparent);
   transition: transform var(--app-transition-fast), border-color var(--app-transition-fast);
 }
+.workspace-group-row .workspace-group { padding-right: 46px; }
+.workspace-delete { position: absolute; top: 50%; right: 10px; display: grid; width: 28px; height: 28px; place-items: center; transform: translateY(-50%); border: 0; border-radius: var(--app-radius-sm); background: transparent; color: var(--app-text-muted); cursor: pointer; }
+.workspace-delete:hover { background: var(--app-surface-pressed); color: var(--app-text); }
+.workspace-delete:focus-visible { outline: 2px solid var(--app-text); }
 
 .workspace-group:hover {
   border-color: color-mix(in srgb, var(--app-text) 42%, var(--app-border));

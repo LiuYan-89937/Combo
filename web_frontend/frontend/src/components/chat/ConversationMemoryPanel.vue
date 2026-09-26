@@ -1,10 +1,20 @@
 <template>
   <div class="memory-panel">
     <header>
-      <div><strong>{{ t('status.memory') }}</strong><small>{{ memoryActivityText }}</small></div>
-      <n-button quaternary circle size="small" :loading="loading" @click="refresh">
-        <template #icon><n-icon><RefreshOutline /></n-icon></template>
-      </n-button>
+      <strong>{{ t('status.memory') }}</strong>
+      <div class="memory-controls">
+        <n-select
+          v-model:value="scope"
+          class="memory-scope-select"
+          size="small"
+          :options="scopeOptions"
+          :aria-label="t('status.memoryFilterLabel')"
+          @update:value="refresh"
+        />
+        <n-button quaternary circle size="small" :loading="loading" @click="refresh">
+          <template #icon><n-icon><RefreshOutline /></n-icon></template>
+        </n-button>
+      </div>
     </header>
     <div class="memory-search">
       <n-input v-model:value="query" size="small" clearable :placeholder="t('status.memoryQueryPlaceholder')" @keyup.enter="refresh" />
@@ -37,69 +47,55 @@
           <p>{{ item.content }}</p>
           <time v-if="item.updated_at">{{ formatTime(item.updated_at) }}</time>
         </article>
+        <n-button v-if="nextOffset !== null" quaternary size="small" :loading="loading" @click="loadMore">
+          {{ t('status.memoryLoadMore') }}
+        </n-button>
       </div>
     </n-spin>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSpin } from 'naive-ui'
+import { computed, ref, onMounted, watch } from 'vue'
+import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSelect, NSpin } from 'naive-ui'
 import { RefreshOutline, SearchOutline, TrashOutline } from '@/components/icons'
 import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
-import { memoryApi, type MemoryContextItemView } from '@/api/memory'
+import { memoryApi, type MemoryContextItemView, type MemoryScopeFilter } from '@/api/memory'
 import { useI18n } from '@/composables/useI18n'
-import { useResourceContext } from '@/composables/useResourceContext'
-import { useRuntimeStore } from '@/stores/runtime'
 import { formatShortDateTime, parseDate } from '@/utils/format'
 
-const runtimeStore = useRuntimeStore()
-const resourceContext = useResourceContext()
 const { t } = useI18n()
+const props = defineProps<{ workspaceId?: string | null }>()
 const query = ref('')
+const scope = ref<MemoryScopeFilter>('all')
+const scopeOptions = computed(() => [
+  { label: t('status.memoryScope.all'), value: 'all' },
+  { label: t('status.memoryScope.user'), value: 'user' },
+  { label: t('status.memoryScope.workspace'), value: 'workspace', disabled: !props.workspaceId },
+])
 const items = ref<MemoryContextItemView[]>([])
 const loading = ref(false)
 const error = ref('')
 const deleting = ref<Record<string, boolean>>({})
+const nextOffset = ref<number | null>(null)
 let requestSerial = 0
 
-const contextKey = computed(() => [
-  resourceContext.packageIdForApi.value || '',
-  runtimeStore.activeWorkspaceId || '',
-].join(':'))
-const memoryActivityText = computed(() => {
-  const activity = runtimeStore.memoryActivity
-  if (activity.status === 'writing') return t('status.memoryWriting')
-  if (activity.status === 'failed') return t('status.memoryFailed')
-  if (activity.eventType === 'memory_retrieval_completed' || activity.eventType === 'memory_injection_completed') {
-    return t('status.memoryRetrieved', { count: Number(activity.payload?.item_count || 0) })
-  }
-  if (activity.eventType === 'memory_write_completed') return t('status.memoryWriteCompleted')
-  return t('status.memoryIdle')
-})
-
-async function refresh() {
+async function loadPage(offset: number, append: boolean) {
   const serial = ++requestSerial
-  const workspaceId = runtimeStore.activeWorkspaceId
-  if (!workspaceId) {
-    items.value = []
-    error.value = ''
-    loading.value = false
-    return
-  }
   loading.value = true
   error.value = ''
   try {
-    const response = await memoryApi.query(
-      query.value.trim(),
-      resourceContext.packageIdForApi.value,
-      8,
-      workspaceId,
-    )
-    if (serial === requestSerial) items.value = [...(response.items || [])].sort(memorySort)
+    const response = await memoryApi.query(query.value.trim(), offset, scope.value, props.workspaceId || null)
+    if (serial === requestSerial) {
+      items.value = [...(append ? items.value : []), ...(response.items || [])].sort(memorySort)
+      nextOffset.value = response.next_offset
+    }
   } catch (cause) {
     if (serial === requestSerial) {
-      items.value = []
+      if (!append) {
+        items.value = []
+        nextOffset.value = null
+      }
       error.value = cause instanceof Error ? cause.message : String(cause)
     }
   } finally {
@@ -107,16 +103,16 @@ async function refresh() {
   }
 }
 
+function refresh() { return loadPage(0, false) }
+function loadMore() {
+  if (nextOffset.value !== null) void loadPage(nextOffset.value, true)
+}
+
 async function remove(item: MemoryContextItemView) {
   deleting.value = { ...deleting.value, [item.memory_id]: true }
   try {
-    await memoryApi.deleteItem(
-      item.memory_id,
-      item.source_scope === 'none' ? 'agent' : item.source_scope,
-      resourceContext.packageIdForApi.value,
-      runtimeStore.activeWorkspaceId,
-    )
-    items.value = items.value.filter(candidate => candidate.memory_id !== item.memory_id)
+    await memoryApi.deleteItem(item.memory_id)
+    await refresh()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -133,8 +129,7 @@ function memorySort(left: MemoryContextItemView, right: MemoryContextItemView): 
 
 function memoryScopeLabel(scope: string): string {
   if (scope === 'workspace') return t('status.memoryScope.workspace')
-  if (scope === 'global') return t('status.memoryScope.user')
-  return t('status.memoryScope.agent')
+  return t('status.memoryScope.user')
 }
 
 function formatTime(value: string): string {
@@ -142,22 +137,23 @@ function formatTime(value: string): string {
   return parsed ? formatShortDateTime(parsed) : value
 }
 
-watch(contextKey, () => {
-  items.value = []
-  error.value = ''
-  if (runtimeStore.activeWorkspaceId) void refresh()
-}, { immediate: true })
+onMounted(() => { void refresh() })
+watch(() => props.workspaceId, () => {
+  if (scope.value === 'workspace') {
+    if (!props.workspaceId) scope.value = 'all'
+    void refresh()
+  }
+})
 </script>
 
 <style scoped>
 .memory-panel { width: min(390px, calc(100vw - 44px)); max-height: min(64vh, 560px); display: flex; flex-direction: column; padding: 14px; }
-header, .memory-item-heading, .memory-search { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+header, .memory-controls, .memory-item-heading, .memory-search { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 header { margin-bottom: 12px; }
-header > div { display: grid; gap: 2px; }
 header strong { font-size: 13px; }
-header small { color: var(--app-text-muted); font-size: 10px; }
 .memory-search { margin-bottom: 12px; }
 .memory-search :deep(.n-input) { flex: 1; }
+.memory-scope-select { width: 104px; }
 .memory-list { display: grid; max-height: 430px; overflow: auto; gap: 8px; padding-right: 3px; }
 .memory-item { padding: 10px 11px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface); }
 .memory-item-heading span { color: var(--app-text-muted); font-size: 10px; }

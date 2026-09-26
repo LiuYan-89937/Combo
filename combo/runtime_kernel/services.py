@@ -1,10 +1,30 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Protocol, runtime_checkable
 
+from langchain_core.tools import BaseTool
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 from pydantic import BaseModel, ConfigDict
 
+from combo.context_system.runtime import ContextSystemRuntime
+from combo.runtime_kernel.context.engine import ContextEngine
 from combo.runtime_kernel.errors import RuntimeKernelError
+from combo.runtime_kernel.model_operations.service import ModelOperationService
+from combo.runtime_kernel.observability.emitter import ObservabilityManager
+
+
+@runtime_checkable
+class RuntimeToolRegistry(Protocol):
+    def list_tool_ids(self) -> list[str]: ...
+
+    def model_tools(self, tool_ids: list[str] | set[str] | None = None) -> list[BaseTool]: ...
+
+
+@runtime_checkable
+class RuntimeContextResourceReader(Protocol):
+    def current(self) -> Mapping[str, Any]: ...
 
 
 class RuntimeServices(BaseModel):
@@ -12,17 +32,17 @@ class RuntimeServices(BaseModel):
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    model_operation_service: object
-    tool_registry: object
-    graph_store: object
-    context_system: object
-    context_engine: object
-    observability_manager: object
-    checkpointer: object
+    model_operation_service: ModelOperationService
+    tool_registry: RuntimeToolRegistry
+    graph_store: BaseStore
+    context_system: ContextSystemRuntime
+    context_engine: ContextEngine
+    observability_manager: ObservabilityManager
+    checkpointer: BaseCheckpointSaver
     scheduler_store: object | None = None
     scheduler_runtime: object | None = None
     artifact_store: object | None = None
-    runtime_context_resources: object
+    runtime_context_resources: RuntimeContextResourceReader
 
     def get_required(self, name: str) -> Any:
         value = getattr(self, name, None)

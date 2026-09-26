@@ -21,6 +21,10 @@ class ModelPoolStoreError(RuntimeError):
     pass
 
 
+class ModelPoolStoreNotInitialized(ModelPoolStoreError):
+    pass
+
+
 class ModelPoolRevisionConflict(ModelPoolStoreError):
     pass
 
@@ -58,7 +62,7 @@ class ModelPoolStore:
         self.read_only = model_pool_store_read_only() if read_only is None else read_only
         if self.read_only:
             if not self.path.is_file():
-                raise ModelPoolStoreError(f"model pool store is not initialized: {self.path}")
+                raise ModelPoolStoreNotInitialized(f"model pool store is not initialized: {self.path}")
         elif setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             initialize_sqlite_store(
@@ -68,7 +72,7 @@ class ModelPoolStore:
                 wal=True,
             )
         elif not self.path.is_file():
-            raise ModelPoolStoreError(f"model pool store is not initialized: {self.path}")
+            raise ModelPoolStoreNotInitialized(f"model pool store is not initialized: {self.path}")
 
     def create_credential(self, credential: ModelPoolCredential) -> ModelPoolCredential:
         return self._persist_credential(credential, expected_revision=None)

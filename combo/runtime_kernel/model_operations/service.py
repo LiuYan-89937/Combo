@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +17,6 @@ from pydantic import BaseModel
 from combo.context_system.events import emit_context_event
 from combo.context_system.token_counter import (
     context_window_payload,
-    model_context_limits,
     provider_token_budget_payload,
     token_count_from_usage_metadata,
 )
@@ -26,6 +25,7 @@ from combo.context_system.token_estimation import (
     estimate_text_tokens,
 )
 from combo.models.content import content_to_text, strip_internal_snapshot_blocks
+from combo.models.chat_model import ChatModelSettings
 from combo.models.message_layout import system_messages_first
 from combo.models.reasoning import reasoning_content_from_message
 from combo.models.usage import usage_metadata_with_fallback
@@ -33,7 +33,8 @@ from combo.runtime_kernel.model_inputs import (
     build_runtime_model_input,
 )
 from combo.runtime_kernel.model_operations.tool_calls import bind_tools, tool_calls_from_response
-from combo.runtime_kernel.structured_output import (
+from combo.runtime_kernel.state import RuntimeState
+from combo.model_invocation.structured_output import (
     StructuredOutputExecution,
     StructuredOutputInvocation,
     execute_structured_output_invocation,
@@ -43,8 +44,8 @@ from combo.runtime_kernel.types import ModelInvocationResult
 from combo.runtime_protocol import ModelSelectionSnapshot
 from combo.tooling.description_context import contextualize_tool_descriptions
 from combo.tooling.model_visibility import tools_visible_to_model
+from combo.runtime_protocol.interruption import RuntimeModelGenerationInterrupted
 from combo.tooling.execution_context import (
-    RuntimeModelGenerationInterrupted,
     begin_runtime_model_generation,
     consume_runtime_inputs,
     execute_runtime_model_invocation,
@@ -60,9 +61,9 @@ class RuntimeModelHandle:
     runtime_instance_id: str
     snapshot: ModelSelectionSnapshot
     model: Any
-    settings: Any
+    settings: ChatModelSettings
     compression_model: Any
-    compression_settings: Any
+    compression_settings: ChatModelSettings
 
 
 class RuntimeModelHandleRegistry:
@@ -98,19 +99,80 @@ class RuntimeModelHandleRegistry:
             return self._handles.pop(key, None)
 
 
-class ModelInvocationOperations:
-    """Kernel-level model invocation shapes shared by runtime services.
+class ModelOperationService:
+    """Invoke the model handle frozen for the current runtime instance."""
 
-    The service is intentionally limited to model invocation shapes. It does
-    not decide graph routes, plan tools, approve tools, or execute tools.
-    """
+    model_role = "runtime"
 
-    _workspace_path_resolver: Callable[[str], Path]
+    def __init__(
+        self,
+        registry: RuntimeModelHandleRegistry,
+        *,
+        workspace_path_resolver: Callable[[str], Path],
+    ) -> None:
+        self._registry = registry
+        self._workspace_path_resolver = workspace_path_resolver
+
+    @staticmethod
+    def _system_prompt(*, state: RuntimeState) -> str:
+        system_prompt = state.runtime_config.system_prompt.strip()
+        if not system_prompt:
+            raise RuntimeError("fixed runtime model operations require runtime_config.system_prompt")
+        return system_prompt
+
+    def _resolve_model(
+        self,
+        role: ModelRole | None = None,
+        *,
+        state: RuntimeState,
+    ) -> tuple[Any, dict[str, Any]]:
+        if role is not None:
+            raise RuntimeError("fixed runtime model operations do not accept role selection")
+        handle = self._registry.require(state.run.runtime_instance_id)
+        settings_metadata = handle.settings.metadata()
+        return handle.model, {
+            **settings_metadata,
+            "model_operation": handle.snapshot.operation,
+            "model_role": handle.snapshot.operation,
+            "model_profile_id": handle.snapshot.profile_id,
+            "model_profile_revision": handle.snapshot.profile_revision,
+            "credential_resource_id": handle.snapshot.credential_resource_id,
+            "credential_revision": handle.snapshot.credential_revision,
+            "provider": handle.snapshot.provider,
+            "model": handle.snapshot.model_name,
+            "model_source": "runtime_policy_snapshot",
+        }
+
+    def context_limits_for_role(
+        self,
+        role: str | None = None,
+        *,
+        state: RuntimeState,
+    ) -> dict[str, int | None]:
+        if role not in {None, "runtime", "main_turn", "temporary_turn"}:
+            raise RuntimeError("fixed runtime context limits do not accept legacy model roles")
+        _model, metadata = self._resolve_model(state=state)
+        return {
+            "max_input_tokens": metadata.get("max_input_tokens"),
+            "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),
+        }
+
+    def operation_for_state(self, state: RuntimeState) -> str:
+        _model, metadata = self._resolve_model(state=state)
+        return str(metadata["model_operation"])
+
+    def compression_model_for_state(self, state: RuntimeState) -> tuple[Any, int | None, dict[str, Any]]:
+        handle = self._registry.require(state.run.runtime_instance_id)
+        return (
+            handle.compression_model,
+            handle.compression_settings.max_output_tokens,
+            handle.compression_settings.metadata(),
+        )
 
     def text(
         self,
         *,
-        state: Any,
+        state: RuntimeState,
         messages: list[Any] | None = None,
         emit_event=None,
         model_role: ModelRole | None = None,
@@ -126,7 +188,7 @@ class ModelInvocationOperations:
     def tool_bound_chat(
         self,
         *,
-        state: Any,
+        state: RuntimeState,
         messages: list[Any] | None = None,
         tools: list[BaseTool] | None = None,
         emit_event=None,
@@ -263,7 +325,7 @@ class ModelInvocationOperations:
         self,
         *,
         output_model: type[BaseModel],
-        state: Any,
+        state: RuntimeState,
         messages: list[Any] | None = None,
         prebuilt_messages: list[Any] | None = None,
         structured_method: str | None = None,
@@ -414,87 +476,6 @@ class ModelInvocationOperations:
         return parsed
 
 
-class ModelOperationService(ModelInvocationOperations):
-    """Resolve exactly one model handle frozen for the current runtime instance."""
-
-    model_role = "runtime"
-    authoritative_runtime_model = True
-
-    def __init__(
-        self,
-        registry: RuntimeModelHandleRegistry,
-        *,
-        workspace_path_resolver: Callable[[str], Path],
-    ) -> None:
-        self._registry = registry
-        self._workspace_path_resolver = workspace_path_resolver
-
-    @staticmethod
-    def _system_prompt(*, state: Any) -> str:
-        runtime_config = getattr(state, "runtime_config", None)
-        system_prompt = str(getattr(runtime_config, "system_prompt", "") or "").strip()
-        if not system_prompt:
-            raise RuntimeError("fixed runtime model operations require runtime_config.system_prompt")
-        return system_prompt
-
-    def _resolve_model(
-        self,
-        role: ModelRole | None = None,
-        *,
-        state: Any | None = None,
-    ) -> tuple[Any, dict[str, Any]]:
-        if role is not None:
-            raise RuntimeError("fixed runtime model operations do not accept role selection")
-        runtime_instance_id = str(
-            getattr(getattr(state, "run", None), "runtime_instance_id", "") or ""
-        ).strip()
-        handle = self._registry.require(runtime_instance_id)
-        settings_metadata = handle.settings.metadata() if hasattr(handle.settings, "metadata") else {}
-        return handle.model, {
-            **settings_metadata,
-            "model_operation": handle.snapshot.operation,
-            "model_role": handle.snapshot.operation,
-            "model_profile_id": handle.snapshot.profile_id,
-            "model_profile_revision": handle.snapshot.profile_revision,
-            "credential_resource_id": handle.snapshot.credential_resource_id,
-            "credential_revision": handle.snapshot.credential_revision,
-            "provider": handle.snapshot.provider,
-            "model": handle.snapshot.model_name,
-            "model_source": "runtime_policy_snapshot",
-        }
-
-    def context_limits_for_role(
-        self,
-        role: str | None = None,
-        *,
-        state: Any | None = None,
-    ) -> dict[str, int | None]:
-        if role not in {None, "runtime", "main_turn", "temporary_turn"}:
-            raise RuntimeError("fixed runtime context limits do not accept legacy model roles")
-        _model, metadata = self._resolve_model(state=state)
-        return {
-            "max_input_tokens": metadata.get("max_input_tokens"),
-            "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),
-        }
-
-    def operation_for_state(self, state: Any) -> str:
-        _model, metadata = self._resolve_model(state=state)
-        return str(metadata["model_operation"])
-
-    def compression_model_for_state(self, state: Any) -> tuple[Any, int | None, dict[str, Any]]:
-        runtime_instance_id = str(
-            getattr(getattr(state, "run", None), "runtime_instance_id", "") or ""
-        ).strip()
-        handle = self._registry.require(runtime_instance_id)
-        return (
-            handle.compression_model,
-            getattr(handle.compression_settings, "max_output_tokens", None),
-            handle.compression_settings.metadata()
-            if hasattr(handle.compression_settings, "metadata")
-            else {},
-        )
-
-
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
         return
@@ -503,17 +484,14 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
 
 def _record_model_token_budget(
     *,
-    state: Any,
+    state: RuntimeState,
     node_id: str | None,
     model_role: str,
     usage_metadata: Any,
     usage_observation: dict[str, Any],
     retained_message_tokens_after_call: int | None = None,
 ) -> None:
-    if state is None or node_id is None:
-        return
-    context = getattr(state, "context", None)
-    if context is None or not hasattr(context, "token_budget"):
+    if node_id is None:
         return
     payload = provider_token_budget_payload(
         usage_metadata=usage_metadata,
@@ -526,8 +504,8 @@ def _record_model_token_budget(
     )
     if not payload:
         return
-    context.token_budget = {
-        **dict(getattr(context, "token_budget", {}) or {}),
+    state.context.token_budget = {
+        **state.context.token_budget,
         **payload,
     }
 
@@ -551,6 +529,8 @@ def _invoke_tool_bound_chat(
     reasoning_parts: list[str] = []
     cancelled = False
     stream_iterator = stream(messages)
+    if not isinstance(stream_iterator, Iterable):
+        raise TypeError("model stream must return an iterable")
     stream_events: Queue[tuple[str, Any]] = Queue()
     context = copy_context()
 
@@ -635,7 +615,7 @@ def _invoke_tool_bound_chat(
             reasoning_content="".join(reasoning_parts),
             partial_tool_calls=partial_tool_calls,
         ) from exc
-    except (AttributeError, NotImplementedError):
+    except NotImplementedError:
         if chunks:
             raise
         return execute_runtime_model_invocation(
@@ -660,22 +640,15 @@ def _invoke_tool_bound_chat(
 def _merge_stream_chunks(chunks: list[Any]) -> Any:
     merged = chunks[0]
     for chunk in chunks[1:]:
-        try:
-            merged = merged + chunk
-        except TypeError:
-            merged = chunk
+        merged = merged + chunk
     return merged
 
 
 def _attach_reasoning_content(response: Any, reasoning_content: str) -> None:
     additional_kwargs = getattr(response, "additional_kwargs", None)
-    if isinstance(additional_kwargs, dict):
-        additional_kwargs["reasoning_content"] = reasoning_content
-        return
-    try:
-        response.additional_kwargs = {"reasoning_content": reasoning_content}
-    except Exception:
-        return
+    if not isinstance(additional_kwargs, dict):
+        raise TypeError("streamed model response has no additional_kwargs mapping")
+    additional_kwargs["reasoning_content"] = reasoning_content
 
 
 def _emit_model_message_completed(
@@ -789,7 +762,7 @@ def _message_content_text(message: Any) -> str:
 
 def _emit_model_usage_context_window(
     *,
-    state: Any,
+    state: RuntimeState,
     services: Any | None,
     node_id: str | None,
     model_role: str,
@@ -798,15 +771,11 @@ def _emit_model_usage_context_window(
     if services is None or node_id is None:
         return
     token_count = int(usage_observation.get("total_tokens") or 0)
-    limits = model_context_limits(services=services, state=state, model_role=model_role)
-    context_runtime = getattr(services, "context_system", None)
-    resolve_context_limits = getattr(context_runtime, "model_context_limits", None)
-    if callable(resolve_context_limits):
-        limits = resolve_context_limits(
-            services=services,
-            state=state,
-            model_role=model_role,
-        )
+    limits = services.context_system.model_context_limits(
+        services=services,
+        state=state,
+        model_role=model_role,
+    )
     payload = context_window_payload(
         node_id=node_id,
         token_count=token_count,
@@ -816,12 +785,10 @@ def _emit_model_usage_context_window(
         model_role=model_role,
         source=f"model_operation.{usage_observation.get('usage_source') or 'local_estimation'}",
     )
-    context = getattr(state, "context", None)
-    if context is not None and hasattr(context, "token_budget"):
-        context.token_budget = {
-            **dict(getattr(context, "token_budget", {}) or {}),
-            **payload,
-        }
+    state.context.token_budget = {
+        **state.context.token_budget,
+        **payload,
+    }
     emit_context_event(
         services=services,
         state=state,

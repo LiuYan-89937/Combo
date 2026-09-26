@@ -7,6 +7,7 @@ import { ref } from 'vue'
 import { EventStreamClient, type ConnectionStatus } from '@/api/events'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
+import { acceptRuntimeEventId } from '@/stores/runtime/eventIdentity'
 import { syncDomainStoresFromRuntime } from '@/stores/runtimeSync'
 import { isRequestScopedEvent } from '@/stores/runtime/eventUtils'
 import { useAgentGroupStore } from '@/stores/agentGroup'
@@ -56,6 +57,7 @@ export function applyRuntimeEvent(event: RuntimeFrontendEvent): void {
 }
 
 function applyRuntimeEventImmediately(event: RuntimeFrontendEvent): void {
+  if (!acceptRuntimeEventId(event.event_id)) return
   if (event.event_type === 'runtime_ready') {
     activeEventStreamId = String(event.payload?.event_stream_id || '').trim() || null
   }

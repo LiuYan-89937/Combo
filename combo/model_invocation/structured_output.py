@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from combo.models.content import content_to_text
 from combo.models.message_layout import system_messages_first
-from combo.tooling.execution_context import RuntimeModelGenerationInterrupted
+from combo.runtime_protocol.interruption import RuntimeModelGenerationInterrupted
 
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
@@ -258,4 +258,3 @@ def _structured_retry_instruction(
         f"\n{type(error).__name__}: {error}\n\n"
         f"Output JSON schema:\n{output_json_schema}"
     )
-

@@ -2,7 +2,7 @@ import { requestJson, withQuery } from './http'
 
 export interface MemoryContextItemView {
   memory_id: string
-  source_scope: 'workspace' | 'agent' | 'user' | 'none'
+  source_scope: 'workspace' | 'user'
   memory_type: string
   kind: string
   content: string
@@ -17,6 +17,7 @@ export interface MemoryQueryResponse {
   namespace: string[]
   namespaces: string[][]
   query: string
+  next_offset: number | null
   items: MemoryContextItemView[]
   token_estimate: number
   report: Record<string, any>
@@ -29,28 +30,19 @@ export interface MemoryDeleteResponse {
   namespace: string[]
 }
 
+export type MemoryScopeFilter = 'all' | 'user' | 'workspace'
+
 export const memoryApi = {
-  query: (query: string, packageId?: string, limit = 8, workspaceId?: string | null) =>
+  query: (query: string, offset = 0, scope: MemoryScopeFilter = 'all', workspaceId: string | null = null) =>
     requestJson<MemoryQueryResponse>(withQuery('/api/memory/query', {
       query,
-      package_id: packageId,
-      workspace_id: workspaceId,
-      scope: 'combined',
-      limit,
+      offset,
+      scope,
+      workspace_id: workspaceId || undefined,
     })),
-  deleteItem: (
-    memoryId: string,
-    scope: 'workspace' | 'agent' | 'user',
-    packageId?: string,
-    workspaceId?: string | null,
-  ) =>
+  deleteItem: (memoryId: string) =>
     requestJson<MemoryDeleteResponse>('/api/memory/items', {
       method: 'DELETE',
-      body: JSON.stringify({
-        memory_id: memoryId,
-        package_id: packageId,
-        workspace_id: workspaceId,
-        scope,
-      }),
+      body: JSON.stringify({ memory_id: memoryId }),
     }),
 }

@@ -545,13 +545,11 @@ def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind =
         )
     profile = resolve_provider_profile(provider)
     capabilities = profile.capabilities
-    input_modalities = ["text"]
-    for modality, support in (
-        ("image", capabilities.image_input),
-        ("audio", capabilities.audio_input),
-    ):
-        if support != "unsupported":
-            input_modalities.append(modality)
+    input_modalities: list[ModelPoolModality] = ["text"]
+    if capabilities.image_input != "unsupported":
+        input_modalities.append("image")
+    if capabilities.audio_input != "unsupported":
+        input_modalities.append("audio")
     return ModelPoolCapabilities(
         input_modalities=input_modalities,
         output_modalities=["text"],

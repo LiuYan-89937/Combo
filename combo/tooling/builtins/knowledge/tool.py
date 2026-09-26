@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from combo.dynamic_runtime.control_plane_store import GlobalKnowledgeStore
 from combo.runtime_protocol import RuntimeExecutionIdentity
+from combo.tooling.builtins.runtime_ports import KnowledgeRuntimePort
 from combo.tooling.builtins.knowledge.specs import (
     KNOWLEDGE_RUNTIME_RESOURCE,
     RUNTIME_IDENTITY_RESOURCE,
@@ -30,7 +30,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     store = resources.get(KNOWLEDGE_RUNTIME_RESOURCE)
     identity = resources.get(RUNTIME_IDENTITY_RESOURCE)
-    if not isinstance(store, GlobalKnowledgeStore):
+    if not isinstance(store, KnowledgeRuntimePort):
         raise RuntimeError("knowledge runtime is not configured")
     _require_main(identity)
     action = str(arguments.get("action") or "").strip()

@@ -1,8 +1,6 @@
 from combo.models.chat_model import (
     ChatModelSettings,
     create_chat_model_from_settings,
-    get_main_model,
-    get_task_model,
     list_supported_chat_model_profiles,
 )
 from combo.models.capabilities import (
@@ -13,11 +11,7 @@ from combo.models.capabilities import (
 )
 from combo.models.embedding_model import (
     EmbeddingModelSettings,
-    ResolvedEmbeddingModel,
-    get_embedding_model,
-    get_embedding_model_settings,
-    resolve_embedding_model_profile,
-    reset_embedding_model,
+    create_embedding_model_from_settings,
 )
 from combo.models.protocol import (
     ModelContentPart,
@@ -34,7 +28,7 @@ __all__ = [
     "ChatModelSettings",
     "create_chat_model_from_settings",
     "EmbeddingModelSettings",
-    "ResolvedEmbeddingModel",
+    "create_embedding_model_from_settings",
     "ModelContentPart",
     "ModelMessage",
     "ModelProviderCapabilities",
@@ -45,14 +39,8 @@ __all__ = [
     "NormalizedModelUsage",
     "ProviderProfile",
     "StructuredOutputMethod",
-    "get_embedding_model",
-    "get_embedding_model_settings",
-    "resolve_embedding_model_profile",
-    "get_main_model",
-    "get_task_model",
     "list_supported_chat_model_profiles",
     "normalize_usage_metadata",
     "provider_profile_payload",
     "resolve_provider_profile",
-    "reset_embedding_model",
 ]

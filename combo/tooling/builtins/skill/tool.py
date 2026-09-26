@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.skill_runtime import SkillRuntime
+from combo.tooling.builtins.runtime_ports import SkillRuntimePort
 from combo.tooling.builtins.skill.specs import SKILL_RUNTIME_RESOURCE
 from combo.tooling.envelope import tool_envelope
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get(SKILL_RUNTIME_RESOURCE)
-    if not isinstance(runtime, SkillRuntime):
+    if not isinstance(runtime, SkillRuntimePort):
         raise RuntimeError("Skill runtime is not configured")
     action = str(arguments.get("action") or "").strip()
     if action == "list":

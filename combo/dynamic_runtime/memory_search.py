@@ -4,17 +4,21 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import logging
 from math import isfinite, sqrt
 from threading import RLock
 from uuid import uuid4
 
 from combo.dynamic_runtime.capability_search import CapabilityEmbeddingRuntime
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
-from combo.dynamic_runtime.hybrid_retrieval import (
+from combo.context_system.hybrid_retrieval import (
     RankedRetrievalCandidate, RetrievalChannelEvidence, fuse_hybrid_rankings,
     lexical_coverage, lexical_tokens,
 )
-from combo.runtime_protocol import MemoryRevision
+from combo.runtime_protocol import MemoryRevision, MemoryScope
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +99,8 @@ class HybridMemorySearchIndex:
 
     def search(
         self, *, principal_id: str, workspace_id: str, query: str, limit: int,
-        min_relevance: float = 0.0,
+        min_relevance: float = 0.0, scope: MemoryScope | None = None,
+        all_workspaces: bool = False,
     ) -> tuple[RankedMemory, ...]:
         if limit < 1 or not lexical_tokens(query):
             return ()
@@ -108,14 +113,26 @@ class HybridMemorySearchIndex:
             if generation is None:
                 return ()
             generation_id = generation["generation_id"]
+            if all_workspaces:
+                scope_condition = "1 = 1"
+                scope_parameters: tuple[str, ...] = ()
+            elif scope == "user":
+                scope_condition = "head.scope='user'"
+                scope_parameters = ()
+            elif scope == "workspace":
+                scope_condition = "head.scope='workspace' and head.workspace_id=?"
+                scope_parameters = (workspace_id,)
+            else:
+                scope_condition = "(head.scope='user' or head.workspace_id=?)"
+                scope_parameters = (workspace_id,)
             rows = conn.execute(
                 "select revision.payload_json, document.embedding_json "
                 "from memory_search_documents document join memory_heads head "
                 "on head.memory_id=document.memory_id and head.revision=document.memory_revision "
                 "join memory_revisions revision on revision.memory_id=head.memory_id and revision.revision=head.revision "
                 "where document.generation_id=? and head.status='active' and head.principal_id=? "
-                "and (head.scope='user' or head.workspace_id=?)",
-                (generation_id, principal_id, workspace_id),
+                f"and {scope_condition}",
+                (generation_id, principal_id, *scope_parameters),
             ).fetchall()
             allowed = {}
             vectors = {}
@@ -155,6 +172,7 @@ class HybridMemorySearchIndex:
         try:
             return self._embedding_runtime() if self._embedding_runtime else None
         except Exception:
+            logger.exception("memory embedding runtime resolution failed; using lexical retrieval")
             return None
 
     @staticmethod
@@ -206,35 +224,41 @@ class HybridMemorySearchIndex:
                 raise RuntimeError("embedding result count differs from memory document count")
             for index, vector in zip(pending, embedded, strict=True):
                 vectors[index] = _validated_vector(vector, runtime.dimensions)
-            with self._lock:
-                current_runtime = self._resolve_runtime()
-                if self._closed or current_runtime is None or current_runtime.fingerprint != runtime.fingerprint:
-                    return
-                with self._database.transaction() as conn:
-                    if _dataset_digest(self._documents(conn)) != digest:
-                        self._pending_refresh = True
-                        return
-                    active = self._active(conn)
-                    if active and active["dataset_digest"] == digest and active["embedding_fingerprint"] == runtime.fingerprint:
-                        return
-                    self._prune(conn)
-                    conn.execute(
-                        "insert into memory_search_generations(generation_id,dataset_digest,search_mode,"
-                        "embedding_fingerprint,embedding_profile_id,embedding_dimensions,status,created_at) "
-                        "values (?,?,'hybrid',?,?,?,'building',strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-                        (generation_id, digest, runtime.fingerprint, runtime.profile_id, runtime.dimensions),
-                    )
-                    self._insert_documents(conn, generation_id, documents, vectors)
-                    self._activate(conn, generation_id)
-                    self._prune(conn)
         except Exception as exc:
+            logger.exception("memory document embedding failed; keeping lexical index")
             with self._database.transaction() as conn:
                 conn.execute(
                     "update memory_search_generations set diagnostic=? where status='active' and dataset_digest=?",
                     (f"{type(exc).__name__}: {exc}", digest),
                 )
+            return
+        with self._lock:
+            current_runtime = self._resolve_runtime()
+            if self._closed or current_runtime is None or current_runtime.fingerprint != runtime.fingerprint:
+                return
+            with self._database.transaction() as conn:
+                if _dataset_digest(self._documents(conn)) != digest:
+                    self._pending_refresh = True
+                    return
+                active = self._active(conn)
+                if active and active["dataset_digest"] == digest and active["embedding_fingerprint"] == runtime.fingerprint:
+                    return
+                self._prune(conn)
+                conn.execute(
+                    "insert into memory_search_generations(generation_id,dataset_digest,search_mode,"
+                    "embedding_fingerprint,embedding_profile_id,embedding_dimensions,status,created_at) "
+                    "values (?,?,'hybrid',?,?,?,'building',strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                    (generation_id, digest, runtime.fingerprint, runtime.profile_id, runtime.dimensions),
+                )
+                self._insert_documents(conn, generation_id, documents, vectors)
+                self._activate(conn, generation_id)
+                self._prune(conn)
 
-    def _after_build(self, _future: Future[None]) -> None:
+    def _after_build(self, future: Future[None]) -> None:
+        try:
+            future.result()
+        except Exception:
+            logger.exception("memory index update failed")
         with self._lock:
             pending = self._pending_refresh and not self._closed
             self._pending_refresh = False
@@ -262,10 +286,11 @@ class HybridMemorySearchIndex:
             return ()
         try:
             query_vector = _validated_vector(runtime.embed_query(query), runtime.dimensions)
-            scored = [(memory_id, _cosine(query_vector, _validated_vector(vector, runtime.dimensions)))
-                      for memory_id, vector in vectors.items()]
         except Exception:
+            logger.exception("memory query embedding failed; using lexical ranking")
             return ()
+        scored = [(memory_id, _cosine(query_vector, _validated_vector(vector, runtime.dimensions)))
+                  for memory_id, vector in vectors.items()]
         return tuple(RankedRetrievalCandidate(memory_id, similarity)
                      for memory_id, similarity in sorted(scored, key=lambda item: (-item[1], item[0]))
                      if similarity > 0 and similarity >= minimum)

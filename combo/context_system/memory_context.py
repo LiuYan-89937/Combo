@@ -84,7 +84,9 @@ def memory_tool_payload(message: Any) -> dict | None:
     if not isinstance(payload, dict) or payload.get("status") != "completed":
         return None
     output = payload.get("output")
-    context = output.get(MEMORY_CONTEXT_KEY) if isinstance(output, dict) else None
+    if not isinstance(output, dict):
+        return None
+    context = output.get(MEMORY_CONTEXT_KEY)
     if (not isinstance(context, dict) or context.get("version") != MEMORY_CONTEXT_VERSION
             or output.get("action") != "search"):
         return None

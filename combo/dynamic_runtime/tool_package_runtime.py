@@ -60,12 +60,12 @@ class ToolPackageRuntime:
             raise ValueError("ToolPackage runtime requires a python_package implementation")
         package_root, python_paths = self.prepare(definition)
         if implementation.package_runtime == "trusted_in_process":
-            entrypoint = self._trusted_entrypoint(
+            loaded_entrypoint = self._trusted_entrypoint(
                 package_root=package_root,
                 package_digest=implementation.package_digest,
                 target=implementation.entrypoint,
             )
-            risk_evaluator = (
+            loaded_risk_evaluator = (
                 None
                 if implementation.hard_risk_evaluator_entrypoint is None
                 else self._trusted_entrypoint(
@@ -74,6 +74,25 @@ class ToolPackageRuntime:
                     target=implementation.hard_risk_evaluator_entrypoint,
                 )
             )
+
+            def entrypoint(*, arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+                result = loaded_entrypoint(arguments=arguments, resources=resources)
+                if not isinstance(result, dict):
+                    raise TypeError("trusted ToolPackage entrypoint must return an object")
+                return result
+
+            risk_evaluator: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None
+            if loaded_risk_evaluator is not None:
+                risk_function = loaded_risk_evaluator
+
+                def evaluate_risk(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+                    result = risk_function(arguments, resources)
+                    if not isinstance(result, dict):
+                        raise TypeError("trusted ToolPackage risk evaluator must return an object")
+                    return result
+
+                risk_evaluator = evaluate_risk
+
             return ToolEntrypointLease(
                 entrypoint=entrypoint,
                 hard_risk_evaluator=risk_evaluator,

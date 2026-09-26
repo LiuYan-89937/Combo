@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import uuid4
 
 from combo.dynamic_runtime.dispatcher import CommandOutcome
@@ -19,6 +20,9 @@ from combo.runtime_protocol import (
     RuntimeRequest,
     SendMessagePayload,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class MainTurnCommandHandler:
@@ -101,6 +105,11 @@ class MainTurnCommandHandler:
                     chat_model=selected_model,
                 )
         except Exception:
+            logger.exception(
+                "Main turn policy resolution failed: command_id=%s session_id=%s",
+                envelope.command_id,
+                envelope.session_id,
+            )
             self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
             return CommandOutcome(
                 status="rejected",
@@ -126,6 +135,11 @@ class MainTurnCommandHandler:
                     workspace_id=conversation.workspace_id,
                 )
         except Exception:
+            logger.exception(
+                "Main turn capability resolution failed: command_id=%s session_id=%s",
+                envelope.command_id,
+                envelope.session_id,
+            )
             self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
             return CommandOutcome(
                 status="rejected",

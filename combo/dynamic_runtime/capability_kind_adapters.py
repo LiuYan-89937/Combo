@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import ClassVar, Generic, TypeVar
+from collections.abc import Iterable, Mapping
+from typing import ClassVar, TypeVar
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from combo.dynamic_runtime.capability_adapters import (
     CapabilityAdapterValidation,
@@ -23,7 +23,7 @@ from combo.runtime_protocol import CapabilityDraft, CapabilityKind, CapabilityRe
 DefinitionT = TypeVar("DefinitionT", bound=BaseModel)
 
 
-class TypedCapabilityAdapter(Generic[DefinitionT]):
+class TypedCapabilityAdapter:
     kind: ClassVar[CapabilityKind]
     adapter_id: ClassVar[str]
     adapter_revision: ClassVar[str] = "1"
@@ -91,7 +91,7 @@ class TypedCapabilityAdapter(Generic[DefinitionT]):
         )
 
 
-class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
+class SkillCapabilityAdapter(TypedCapabilityAdapter):
     kind = "skill"
     adapter_id = "dynamic_runtime.skill"
     adapter_revision = "3"
@@ -117,7 +117,7 @@ class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
         )
 
 
-class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
+class ToolCapabilityAdapter(TypedCapabilityAdapter):
     kind = "tool"
     adapter_id = "dynamic_runtime.tool"
     adapter_revision = "4"
@@ -178,7 +178,7 @@ class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
         )
 
 
-class DependencyCapabilityAdapter(TypedCapabilityAdapter[DependencyDefinition]):
+class DependencyCapabilityAdapter(TypedCapabilityAdapter):
     kind = "dependency"
     adapter_id = "dynamic_runtime.dependency"
     definition_schema = "dependency_definition.v1"
@@ -203,7 +203,7 @@ class DependencyCapabilityAdapter(TypedCapabilityAdapter[DependencyDefinition]):
         )
 
 
-def default_capability_adapters() -> tuple[TypedCapabilityAdapter[BaseModel], ...]:
+def default_capability_adapters() -> tuple[TypedCapabilityAdapter, ...]:
     return (
         SkillCapabilityAdapter(),
         ToolCapabilityAdapter(),
@@ -246,7 +246,7 @@ def _pydantic_diagnostics(exc: ValidationError) -> tuple[CapabilityValidationDia
 
 
 def _schema_diagnostics(
-    schema: dict[str, object],
+    schema: Mapping[str, object],
     *,
     path: tuple[str, ...],
 ) -> tuple[CapabilityValidationDiagnostic, ...]:
@@ -328,7 +328,7 @@ def _diagnostic(
     path: tuple[str, ...],
     details: dict[str, object] | None = None,
 ) -> CapabilityValidationDiagnostic:
-    normalized_details = {
+    normalized_details: dict[str, JsonValue] = {
         str(key): value if isinstance(value, (str, int, float, bool)) or value is None else str(value)
         for key, value in (details or {}).items()
     }

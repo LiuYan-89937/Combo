@@ -95,6 +95,8 @@ from combo.dynamic_runtime.launch_context import (
     ComposedRuntimeLaunchContextResolver,
     FileSystemPromptProvider,
     PolicyRuntimeClock,
+    RuntimeLaunchContext,
+    RuntimeLaunchContextResolver,
     RuntimeClock,
     SnapshotCapabilityInstructionRenderer,
     WorkspaceLaunchProjection,
@@ -132,8 +134,6 @@ from combo.dynamic_runtime.services import DynamicRuntimeServiceSet, DynamicRunt
 from combo.dynamic_runtime.runtime_service import (
     DynamicRuntimeService,
     RuntimeExecutionResult,
-    RuntimeLaunchContext,
-    RuntimeLaunchContextResolver,
 )
 from combo.dynamic_runtime.run_control import RuntimeRunControl, RuntimeRunControlRegistry
 from combo.dynamic_runtime.runtime_start import RuntimeStartResult, RuntimeStartStore

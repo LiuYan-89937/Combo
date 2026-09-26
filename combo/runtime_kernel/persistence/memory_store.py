@@ -13,6 +13,8 @@ from typing import Any, Literal, Mapping
 from uuid import uuid4
 
 from langgraph.store.base import BaseStore, GetOp, IndexConfig, Item, ListNamespacesOp, PutOp, SearchItem, SearchOp
+from langgraph.store.base.embed import AEmbeddingsFunc, EmbeddingsFunc, ensure_embeddings
+from langchain_core.embeddings import Embeddings
 from pydantic import BaseModel, ConfigDict, Field
 
 from combo.sqlite_runtime import connect_sqlite, initialize_sqlite_store
@@ -56,6 +58,28 @@ class LangGraphStoreHandle:
     path: Path | None = None
     connection_uri: str | None = None
     semantic_index_enabled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _SqliteIndex:
+    embed: Embeddings
+    dims: int
+    fields: tuple[str, ...]
+
+
+def _required_index(index: IndexConfig) -> tuple[Embeddings | EmbeddingsFunc | AEmbeddingsFunc | str, int]:
+    embed = index.get("embed")
+    dims = index.get("dims")
+    if embed is None or dims is None or dims <= 0:
+        raise ValueError("semantic index requires an embedding provider and positive dimensions")
+    return embed, dims
+
+
+def _sqlite_index(index: IndexConfig | None) -> _SqliteIndex | None:
+    if index is None:
+        return None
+    embed, dims = _required_index(index)
+    return _SqliteIndex(embed=ensure_embeddings(embed), dims=dims, fields=tuple(index.get("fields") or ("$",)))
 
 
 class LangGraphStoreFactory:
@@ -221,13 +245,14 @@ def _setup_store(store: BaseStore, config: LangGraphStoreConfig) -> None:
 def _mongodb_index_payload(index: IndexConfig | None) -> Any:
     if index is None:
         return None
+    embed, dims = _required_index(index)
     try:
         create_vector_index_config = importlib.import_module("langgraph.store.mongodb").create_vector_index_config
     except ModuleNotFoundError:
         return _index_payload(index)
     return create_vector_index_config(
-        embed=index["embed"],
-        dims=index["dims"],
+        embed=embed,
+        dims=dims,
         fields=list(index.get("fields") or []),
     )
 
@@ -236,7 +261,7 @@ class SqliteBaseStore(BaseStore):
     def __init__(self, path: str | Path, *, index: IndexConfig | None = None) -> None:
         super().__init__()
         self.path = Path(path)
-        self.index = index
+        self.index = _sqlite_index(index)
         self._semantic_diagnostics: list[dict[str, Any]] = []
         self.path.parent.mkdir(parents=True, exist_ok=True)
         initialize_sqlite_store(
@@ -387,8 +412,8 @@ class SqliteBaseStore(BaseStore):
     def semantic_index_report(self) -> dict[str, Any]:
         return {
             "enabled": self.index is not None,
-            "dims": self.index.get("dims") if self.index is not None else None,
-            "fields": list(self.index.get("fields") or []) if self.index is not None else [],
+            "dims": self.index.dims if self.index is not None else None,
+            "fields": list(self.index.fields) if self.index is not None else [],
             "diagnostics": list(self._semantic_diagnostics[-20:]),
         }
 
@@ -514,12 +539,13 @@ def _matches_filter(value: dict[str, Any], filter: dict[str, Any]) -> bool:
 def _index_payload(index: IndexConfig | None) -> dict[str, Any] | None:
     if index is None:
         return None
+    embed, dims = _required_index(index)
     payload: dict[str, Any] = {
-        "embed": index["embed"],
-        "dims": index["dims"],
+        "embed": embed,
+        "dims": dims,
     }
     if index.get("fields"):
-        payload["fields"] = list(index["fields"] or [])
+        payload["fields"] = list(index.get("fields") or [])
     return payload
 
 
@@ -530,14 +556,14 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_typ
 
 
 def _index_fields(
-    index_config: IndexConfig | None,
+    index_config: _SqliteIndex | None,
     put_index: Literal[False] | list[str] | None,
 ) -> tuple[str, ...]:
     if index_config is None or put_index is False:
         return ()
     if isinstance(put_index, list):
         return tuple(str(item) for item in put_index if str(item).strip())
-    return tuple(index_config.get("fields") or ("$",))
+    return index_config.fields
 
 
 def _indexed_text(value: dict[str, Any], fields: tuple[str, ...]) -> str:
@@ -568,11 +594,11 @@ def _select_field(value: dict[str, Any], field: str) -> Any:
     return current
 
 
-def _embedding_json(index_config: IndexConfig | None, text: str) -> tuple[str | None, dict[str, Any] | None]:
+def _embedding_json(index_config: _SqliteIndex | None, text: str) -> tuple[str | None, dict[str, Any] | None]:
     if index_config is None or not text.strip():
         return None, None
-    embed = index_config["embed"]
-    dims = int(index_config["dims"])
+    embed = index_config.embed
+    dims = index_config.dims
     try:
         vectors = embed.embed_documents([text])
     except Exception as exc:
@@ -608,16 +634,16 @@ def _embedding_json(index_config: IndexConfig | None, text: str) -> tuple[str | 
     )
 
 
-def _embed_query(index_config: IndexConfig | None, query: str | None) -> tuple[list[float] | None, dict[str, Any] | None]:
+def _embed_query(index_config: _SqliteIndex | None, query: str | None) -> tuple[list[float] | None, dict[str, Any] | None]:
     if index_config is None or not query or not query.strip():
         return None, _semantic_diagnostic(
             operation="query_embedding",
             status="unavailable",
             reason="index_disabled" if index_config is None else "empty_query",
-            expected_dims=index_config.get("dims") if index_config is not None else None,
+            expected_dims=index_config.dims if index_config is not None else None,
         )
-    embed = index_config["embed"]
-    dims = int(index_config["dims"])
+    embed = index_config.embed
+    dims = index_config.dims
     try:
         vector = [float(item) for item in embed.embed_query(query)]
     except Exception as exc:

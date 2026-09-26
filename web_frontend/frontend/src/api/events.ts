@@ -18,7 +18,6 @@ const CONNECTION_STALE_AFTER_MS = 45_000
 export class EventStreamClient {
   private source: EventSource | null = null
   private status: ConnectionStatus = 'disconnected'
-  private seenEventIds = new Set<string>()
   private reconnectTimer: number | null = null
   private reconnectAttempt = 0
   private stopped = true
@@ -109,12 +108,6 @@ export class EventStreamClient {
       const data = JSON.parse(event.data)
       const runtimeEvent = data.kind === 'combo_frontend_event' ? data.event : data
       if (!runtimeEvent?.event_id) return
-      if (this.seenEventIds.has(runtimeEvent.event_id)) return
-      this.seenEventIds.add(runtimeEvent.event_id)
-      if (this.seenEventIds.size > 10000) {
-        const firstId = this.seenEventIds.values().next().value
-        if (firstId !== undefined) this.seenEventIds.delete(firstId)
-      }
       this.config.onEvent(runtimeEvent as RuntimeFrontendEvent)
     } catch (error) {
       this.config.onError(error as Error)

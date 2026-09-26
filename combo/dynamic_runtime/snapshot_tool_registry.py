@@ -223,14 +223,15 @@ class SnapshotToolRegistryFactory:
         materialized: list[MaterializedSnapshotTool] = []
         try:
             for projection in capability_snapshot.projections:
-                if projection.kind not in {"tool", "mcp_tool"}:
+                kind = projection.kind
+                if kind != "tool" and kind != "mcp_tool":
                     continue
                 expected = bindings_by_capability.get(projection.capability_id, ())
                 if not expected:
                     raise SnapshotToolRegistryError(
                         f"tool projection has no model alias binding: {projection.capability_id}"
                     )
-                items = self._materializers[projection.kind].materialize(
+                items = self._materializers[kind].materialize(
                     projection=projection,
                     capability_snapshot=capability_snapshot,
                     runtime_instance=runtime_instance,

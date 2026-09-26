@@ -37,8 +37,10 @@ def _resource_summary(value: Any) -> JSONValue:
     custom_summary = _custom_summary(value)
     if custom_summary is not None:
         return _resource_summary(custom_summary)
-    if _is_json_serializable(value):
-        return value
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    except (TypeError, ValueError):
+        pass
     return {
         "kind": "runtime_object",
         "type": f"{type(value).__module__}.{type(value).__qualname__}",
@@ -51,11 +53,3 @@ def _custom_summary(value: Any) -> Any | None:
         if callable(method):
             return method()
     return None
-
-
-def _is_json_serializable(value: Any) -> bool:
-    try:
-        json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return False
-    return True

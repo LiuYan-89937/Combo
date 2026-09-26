@@ -14,7 +14,6 @@
         class="page-capsule"
         :active="target.pageId === activePageId"
         :title="target.title || target.url || t('browser.panelTitle')"
-        :subtitle="target.pageId === activePageId ? agentOperation : ''"
         :expanded="target.pageId === activePageId && !minimized"
         @select="activateTarget(target)"
         :style="{ zIndex: index + 1 }"
@@ -80,7 +79,6 @@
           <div v-if="connectionStatus !== 'connected'" class="viewport-status">
             {{ statusText }}
           </div>
-          <div v-else-if="!interactive" class="watching-badge">{{ t('browser.agentControl') }}</div>
         </div>
       </FloatingActivityPanel>
     </aside>
@@ -119,7 +117,6 @@ const interactive = ref(false)
 const connectionStatus = ref<'connecting' | 'connected' | 'error' | 'closed'>('closed')
 const address = ref('')
 const title = ref('')
-const agentOperation = ref('')
 const browserTargets = ref<BrowserTarget[]>([])
 const closingPageIds = ref(new Set<string>())
 const closedPageIds = ref(new Set<string>())
@@ -161,7 +158,6 @@ const statusText = computed(() => {
 
 watch(latestBrowserActivity, (activity) => {
   if (!activity) return
-  agentOperation.value = t('browser.agentOperation', { tool: activity.toolName })
   if (activity.status === 'started') {
     if (activity.toolName === 'browser_open') {
       visible.value = true
@@ -520,7 +516,6 @@ function closePanel() {
   visible.value = false
   interactive.value = false
   disconnectViewSocket()
-  agentOperation.value = ''
 }
 
 function disconnectViewSocket() {
@@ -537,7 +532,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.page-capsule-stack { width: 100%; max-height: 192px; display: flex; flex-direction: column; gap: 8px; padding: 0; overflow-y: auto; scrollbar-width: none; }
+.page-capsule-stack { box-sizing: border-box; width: calc(100% + var(--app-space-md) + var(--app-space-md)); max-height: calc(192px + var(--app-space-md) + var(--app-space-md)); display: flex; flex-direction: column; gap: 8px; margin: calc(0px - var(--app-space-md)); padding: var(--app-space-md); overflow-y: auto; scrollbar-width: none; }
 .page-capsule-stack::-webkit-scrollbar { display: none; }
 .page-capsule.active { cursor: grab; touch-action: none; user-select: none; }
 .browser-panel.dragging .page-capsule.active { cursor: grabbing; }
@@ -560,7 +555,6 @@ button:hover { background: var(--app-surface-muted); }
 .browser-viewport canvas { display: block; width: 100%; height: 100%; cursor: default; touch-action: none; }
 .browser-viewport.interactive canvas { cursor: crosshair; }
 .viewport-status { position: absolute; padding: 10px 14px; border-radius: var(--app-radius-md); color: white; background: rgba(0, 0, 0, .68); backdrop-filter: blur(12px); }
-.watching-badge { position: absolute; right: 12px; bottom: 12px; padding: 6px 10px; border-radius: var(--app-radius-pill); color: white; background: rgba(0, 0, 0, .58); font-size: 11px; backdrop-filter: blur(10px); }
 @keyframes browser-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 560px) { .control-toggle { padding-inline: 6px; } }
 </style>

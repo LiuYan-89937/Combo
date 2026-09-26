@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
+from combo.tooling.builtins.runtime_ports import CapabilityCatalogPort
 from combo.tooling.envelope import tool_envelope
 
 
@@ -11,7 +11,7 @@ CAPABILITY_CATALOG_RESOURCE = "capability_catalog"
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     catalog = resources.get(CAPABILITY_CATALOG_RESOURCE)
-    if not isinstance(catalog, CapabilityCatalogRuntime):
+    if not isinstance(catalog, CapabilityCatalogPort):
         raise RuntimeError("capability catalog runtime is not configured")
     action = str(arguments.get("action") or "").strip()
     if action == "list_active":

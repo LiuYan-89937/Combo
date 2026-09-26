@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, Protocol, cast
 
+from combo.models.adapters.base import ChatModelAdapter
 from combo.models.capabilities import ProviderProfile
 
-if TYPE_CHECKING:
-    from combo.models.adapters.base import ChatModelAdapter
+
+class _AdapterFactory(Protocol):
+    def __call__(self, profile: ProviderProfile) -> ChatModelAdapter: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +28,7 @@ def adapter_for_profile(profile: ProviderProfile) -> ChatModelAdapter:
         raise TypeError(
             f"chat model adapter {profile.adapter_id} does not expose {spec.class_name}"
         )
-    return cast("type[ChatModelAdapter]", adapter_type)(profile)
+    return cast(_AdapterFactory, adapter_type)(profile)
 
 
 _ADAPTER_SPECS = {

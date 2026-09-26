@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -101,7 +102,7 @@ class DelegationStore:
         for task_id, (workspace_id, principal_id, agent_name) in migration_candidates.items():
             try:
                 root = workspace_root_resolver(workspace_id, principal_id)
-                manager = AgentWorktreeManager(repository=root)
+                manager = AgentWorktreeManager(repository=Path(root))
                 legacy = manager.consume_legacy_worktree(
                     task_id,
                     label=worktree_label(task_id, agent_name),
@@ -919,6 +920,7 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
         return ()
     event_type = str(payload.get("event_type") or "")
     if event_type == "model_call_started":
+        model_payload = payload.get("payload")
         return (
             {
                 "summary": "thinking",
@@ -926,7 +928,7 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
                 "source": "model",
                 "source_event_id": str(payload.get("event_id") or "") or None,
                 "created_at": str(payload.get("created_at") or "") or utc_now_text(),
-                "details": _json_record(payload.get("payload") if isinstance(payload.get("payload"), dict) else {}),
+                "details": _json_record(model_payload if isinstance(model_payload, dict) else {}),
             },
         )
     if event_type != "runtime_activity_updated":

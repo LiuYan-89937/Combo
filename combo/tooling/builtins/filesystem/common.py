@@ -6,7 +6,7 @@ from types import MappingProxyType
 from collections.abc import Mapping
 from typing import Any
 
-from combo.tooling.spec import ToolRiskResult
+from combo.tooling.spec import ToolRiskAction, ToolRiskResult
 from combo.tooling.workspace_paths import resolve_workspace_path
 from combo.tooling.builtins.filesystem.file_locks import WorkspaceFileLockManager
 
@@ -168,8 +168,8 @@ def path_risk_result(
     context: dict[str, Any],
     *,
     path_key: str = "path",
-    default_action: str,
-    sensitive_action: str,
+    default_action: ToolRiskAction,
+    sensitive_action: ToolRiskAction,
 ) -> dict[str, Any]:
     path_value = arguments.get(path_key) or "."
     if not isinstance(path_value, str) or not path_value.strip():

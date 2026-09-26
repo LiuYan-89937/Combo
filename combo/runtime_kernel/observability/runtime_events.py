@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from combo.runtime_kernel.services import RuntimeServices
-from combo.runtime_kernel.observability.schema import RuntimeObservationEvent
+from combo.runtime_protocol.observation_event import RuntimeObservationEvent
 from combo.runtime_kernel.state import RuntimeState
 
 

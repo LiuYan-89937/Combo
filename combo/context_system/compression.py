@@ -19,7 +19,7 @@ from combo.context_system.schema import (
 from combo.context_system.token_counter import TokenCountResult
 from combo.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
 from combo.runtime_protocol.messages import has_complete_tool_call_history, represented_input_message_ids
-from combo.runtime_kernel.structured_output import (
+from combo.model_invocation.structured_output import (
     execute_structured_output_invocation,
     prepare_structured_output_invocation,
 )
@@ -54,6 +54,9 @@ def maybe_compress_messages(
     started = perf_counter()
     if not policy.enabled:
         return messages, ContextCompressionReport(status="skipped", node_id=node_id, reason="disabled")
+    threshold = policy.trigger_token_threshold
+    if threshold is None:
+        raise RuntimeError("compression trigger token threshold is unavailable")
     count_before = trigger_count or _count_messages(messages, token_counter=token_counter)
     if count_before.token_count is None:
         return (
@@ -70,7 +73,7 @@ def maybe_compress_messages(
             ),
         )
     token_before = count_before.token_count
-    if not force and token_before < policy.trigger_token_threshold:
+    if not force and token_before < threshold:
         return (
             messages,
             ContextCompressionReport(

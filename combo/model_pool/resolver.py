@@ -21,8 +21,7 @@ from combo.models.image_generation import (
     ImageGenerationService,
     ImageGenerationSettings,
 )
-from combo.models import ChatModelSettings
-from combo.models.chat_model import create_chat_model_from_settings
+from combo.models.chat_model import ChatModelSettings, create_chat_model_from_settings
 
 
 def resolve_protocol_base_url(provider: str, base_url: str, *, kind: str) -> str:
@@ -223,23 +222,24 @@ def _select_chat_profile_id(
     role: str,
     store: ModelPoolStore | None,
 ) -> str:
+    if role not in {"main", "task", "compression"}:
+        raise ValueError(f"unsupported chat model role: {role}")
     capabilities = binding.required_capabilities
-    requirement_role = role if role in {"main", "task", "compression"} else "task"
-    requirement = ModelSelectionRequirement(
-        role=requirement_role,
-        purpose=binding.reason,
-        kind="chat",
-        input_modalities=_modalities(capabilities, "input_modalities", ["text"]),
-        output_modalities=_modalities(capabilities, "output_modalities", ["text"]),
-        tool_calling=_optional_bool(capabilities.get("tool_calling")),
-        structured_output_methods=_strings(capabilities.get("structured_output_methods")),
-        reasoning_required=_optional_bool(capabilities.get("reasoning_required")),
-        min_context_window_tokens=_optional_positive_int(capabilities.get("min_context_window_tokens")),
-        optimize_for="balanced",
-    )
+    requirement = ModelSelectionRequirement.model_validate({
+        "role": role,
+        "purpose": binding.reason,
+        "kind": "chat",
+        "input_modalities": _modalities(capabilities, "input_modalities", ["text"]),
+        "output_modalities": _modalities(capabilities, "output_modalities", ["text"]),
+        "tool_calling": _optional_bool(capabilities.get("tool_calling")),
+        "structured_output_methods": _strings(capabilities.get("structured_output_methods")),
+        "reasoning_required": _optional_bool(capabilities.get("reasoning_required")),
+        "min_context_window_tokens": _optional_positive_int(capabilities.get("min_context_window_tokens")),
+        "optimize_for": "balanced",
+    })
     model_store = store or ModelPoolStore(setup=False)
     result = ModelPoolSelector(store=model_store).select(ModelSelectionRequest(requirements=[requirement]))
-    recommendation = next((item for item in result.recommendations if item.role == requirement_role), None)
+    recommendation = next((item for item in result.recommendations if item.role == requirement.role), None)
     if recommendation is None:
         raise LookupError(f"no configured model pool profile matches the {role} model requirements")
     return recommendation.profile_id
@@ -251,14 +251,14 @@ def _select_image_profile_id(
     store: ModelPoolStore | None,
 ) -> str | None:
     capabilities = binding.required_capabilities
-    requirement = ModelSelectionRequirement(
-        role="task",
-        purpose=binding.reason,
-        kind="image_generation",
-        input_modalities=_modalities(capabilities, "input_modalities", ["text"]),
-        output_modalities=_modalities(capabilities, "output_modalities", ["image"]),
-        optimize_for="balanced",
-    )
+    requirement = ModelSelectionRequirement.model_validate({
+        "role": "task",
+        "purpose": binding.reason,
+        "kind": "image_generation",
+        "input_modalities": _modalities(capabilities, "input_modalities", ["text"]),
+        "output_modalities": _modalities(capabilities, "output_modalities", ["image"]),
+        "optimize_for": "balanced",
+    })
     result = ModelPoolSelector(store=store).select(ModelSelectionRequest(requirements=[requirement]))
     recommendation = next((item for item in result.recommendations if item.role == "task"), None)
     return recommendation.profile_id if recommendation is not None else None

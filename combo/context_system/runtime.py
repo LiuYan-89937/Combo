@@ -63,7 +63,7 @@ class ContextSystemRuntime:
         state: Any,
         node_id: str,
         messages: list[Any],
-        services: Any = None,
+        services: Any,
         resources: Mapping[str, Any] | None = None,
         enable_dynamic_evidence: bool = True,
         protected_input_ids: tuple[str, ...] = (),
@@ -229,7 +229,7 @@ class ContextSystemRuntime:
                 report.reason = "same_context_and_source_versions" if reuse else "request_task_source_or_policy_changed"
                 if not memory_policy.automatic_recall_enabled:
                     automatic = []
-                elif reuse:
+                elif reuse and previous is not None:
                     automatic = [item for item in previous.candidates if item.metadata.get("retrieval_origin") != "explicit"]
                 else:
                     automatic = []
@@ -308,9 +308,9 @@ class ContextSystemRuntime:
     def model_context_limits(
         self,
         *,
-        services: Any = None,
-        state: Any = None,
-        model_role: str = "main",
+        services: Any,
+        state: Any,
+        model_role: str,
     ) -> ModelContextLimits:
         compression = self.config.default_policy.compression
         return context_limits_with_overrides(
@@ -336,24 +336,15 @@ def default_context_runtime(
 
 
 def _runtime_model_operation(services: Any, *, state: Any) -> str:
-    service = getattr(services, "model_operation_service", None)
-    resolver = getattr(service, "operation_for_state", None)
-    if callable(resolver):
-        return str(resolver(state))
-    return "main_turn" if bool(getattr(service, "authoritative_runtime_model", False)) else "main"
+    return services.model_operation_service.operation_for_state(state)
 
 
 def _runtime_compression_model(
     services: Any,
     *,
     state: Any,
-) -> tuple[Any | None, int | None, dict[str, Any]]:
-    service = getattr(services, "model_operation_service", None)
-    resolver = getattr(service, "compression_model_for_state", None)
-    if not callable(resolver):
-        return None, None, {}
-    model, max_output_tokens, metadata = resolver(state)
-    return model, max_output_tokens, dict(metadata or {})
+) -> tuple[Any, int | None, dict[str, Any]]:
+    return services.model_operation_service.compression_model_for_state(state)
 
 
 def _effective_context_policy(

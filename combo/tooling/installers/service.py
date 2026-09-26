@@ -2,43 +2,36 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable
-import os
 from pathlib import Path
-import shutil
 import tempfile
-from threading import RLock
 from typing import Any
 
-from combo.dynamic_runtime.mcp_gateway import MCPGateway
-from combo.dynamic_runtime.skill_source import normalize_staged_skill_package
-from combo.tooling.installers.mcp_config import normalize_mcp_server_config
+from combo.skill_manifest import normalize_staged_skill_package
 
 
-SkillValidator = Callable[[Path], None]
-ChangePublisher = Callable[[], None]
+SkillPublisher = Callable[[Path, bool], str]
+SkillRemover = Callable[[str], None]
 
 
 class SkillPackageInstaller:
-    """Validate and atomically publish Skill package trees from any source adapter."""
+    """Prepare Skill packages and delegate publication to the runtime owner."""
 
     def __init__(self, *, skills_dir: str | Path) -> None:
         self.skills_dir = Path(skills_dir).expanduser().resolve()
-        self._validator: SkillValidator | None = None
-        self._publisher: ChangePublisher | None = None
-        self._lock = RLock()
+        self._publisher: SkillPublisher | None = None
+        self._remover: SkillRemover | None = None
 
-    def bind(self, *, validator: SkillValidator, publisher: ChangePublisher) -> None:
-        if self._validator is not None or self._publisher is not None:
+    def bind(self, *, publisher: SkillPublisher, remover: SkillRemover) -> None:
+        if self._publisher is not None or self._remover is not None:
             raise RuntimeError("Skill package installer is already bound")
-        self._validator = validator
         self._publisher = publisher
+        self._remover = remover
 
     def install_package(self, package: dict[str, Any]) -> dict[str, Any]:
         files = package.get("files")
         if not isinstance(files, list) or not files:
             raise ValueError("Skill package.files must be a non-empty array")
-        self.skills_dir.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".skill-package-", dir=self.skills_dir.parent) as temporary:
+        with tempfile.TemporaryDirectory(prefix="combo-skill-package-") as temporary:
             staging_root = Path(temporary)
             package_root = staging_root / "package"
             package_root.mkdir()
@@ -51,10 +44,6 @@ class SkillPackageInstaller:
                 replace_existing=False,
             )
 
-    def publish_changes(self) -> None:
-        _, publisher = self._bound_operations()
-        publisher()
-
     def install_directory(
         self,
         source: str | Path,
@@ -62,30 +51,11 @@ class SkillPackageInstaller:
         source_name: str,
         replace_existing: bool,
     ) -> dict[str, Any]:
-        validator, publisher = self._bound_operations()
-        with self._lock:
-            normalized = normalize_staged_skill_package(source)
-            _require_regular_tree(normalized)
-            validator(normalized.parent)
-            target = self.skills_dir / normalized.name
-            if target.exists() and not replace_existing:
-                raise FileExistsError(f"Skill is already installed: {normalized.name}")
-            self.skills_dir.mkdir(parents=True, exist_ok=True)
-            backup = self.skills_dir.parent / f".{normalized.name}.skill-install-backup"
-            if backup.exists():
-                raise RuntimeError(f"stale Skill installation backup exists: {backup}")
-            if target.exists():
-                os.replace(target, backup)
-            try:
-                shutil.copytree(normalized, target, symlinks=False)
-                publisher()
-            except BaseException:
-                shutil.rmtree(target, ignore_errors=True)
-                if backup.exists():
-                    os.replace(backup, target)
-                publisher()
-                raise
-            shutil.rmtree(backup, ignore_errors=True)
+        publisher, _ = self._bound_operations()
+        normalized = normalize_staged_skill_package(source)
+        _require_regular_tree(normalized)
+        skill_name = publisher(normalized, replace_existing)
+        target = self.skills_dir / skill_name
         return {
             "message": f"Skill installed: {target.name}",
             "installed_skill": {
@@ -96,6 +66,10 @@ class SkillPackageInstaller:
             },
             "restart_required": False,
         }
+
+    def remove(self, skill_name: str) -> None:
+        _, remover = self._bound_operations()
+        remover(skill_name)
 
     def _write_package_file(
         self,
@@ -130,49 +104,10 @@ class SkillPackageInstaller:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
 
-    def _bound_operations(self) -> tuple[SkillValidator, ChangePublisher]:
-        if self._validator is None or self._publisher is None:
+    def _bound_operations(self) -> tuple[SkillPublisher, SkillRemover]:
+        if self._publisher is None or self._remover is None:
             raise RuntimeError("Skill package installer is not bound")
-        return self._validator, self._publisher
-
-
-class CapabilityInstallerService:
-    """Main-runtime facade for durable Skill and MCP capability installation."""
-
-    def __init__(
-        self,
-        *,
-        skill_packages: SkillPackageInstaller,
-        mcp_gateway: MCPGateway,
-        refresh_capability_search: ChangePublisher,
-    ) -> None:
-        self._skill_packages = skill_packages
-        self._mcp_gateway = mcp_gateway
-        self._refresh_capability_search = refresh_capability_search
-
-    def install_skill(self, package: dict[str, Any]) -> dict[str, Any]:
-        return self._skill_packages.install_package(package)
-
-    def install_mcp(self, config: object) -> dict[str, Any]:
-        server = normalize_mcp_server_config(config)
-        self._mcp_gateway.add_server(
-            server,
-            expected_registry_digest=self._mcp_gateway.registry_digest(),
-        )
-        self._refresh_capability_search()
-        installed = self._mcp_gateway.server(str(server["server_id"]))
-        return {
-            "message": f"MCP server installed: {installed.server_id}",
-            "installed_server": {
-                "server_id": installed.server_id,
-                "display_name": str(installed.raw_config.get("display_name") or installed.server_id),
-                "tool_count": len(installed.tools),
-                "resource_count": len(installed.catalog.resources),
-                "resource_template_count": len(installed.catalog.resource_templates),
-                "prompt_count": len(installed.catalog.prompts),
-            },
-            "restart_required": False,
-        }
+        return self._publisher, self._remover
 
 
 def _require_regular_tree(root: Path) -> None:

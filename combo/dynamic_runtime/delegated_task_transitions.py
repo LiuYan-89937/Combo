@@ -2,16 +2,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from combo.dynamic_runtime.persistence_helpers import insert_outbox
 from combo.runtime_protocol import DelegatedTaskEvent, OutboxRecord, RuntimeInstance, TaskEnvelope
 from combo.runtime_protocol.events import RuntimeEventPayload
+from combo.runtime_protocol.contracts import RuntimeExecutionStatus
+from combo.runtime_protocol.delegation import DelegatedTaskEventType
 
 
 def commit_delegated_task_transition(
     conn: Any,
     *,
     instance: RuntimeInstance,
-    status: str,
+    status: RuntimeExecutionStatus,
     event_payload: RuntimeEventPayload | dict[str, Any],
     now: str,
     terminal_at: str | None,
@@ -51,16 +55,17 @@ def commit_delegated_task_transition(
             (request.task_id, request.task_revision),
         ).fetchone()[0]
     )
-    event_type = {
+    event_types: dict[RuntimeExecutionStatus, DelegatedTaskEventType] = {
         "waiting_approval": "approval_required",
         "waiting_external": "question",
         "completed": "result",
         "failed": "failed",
         "cancelled": "cancelled",
-    }[status]
+    }
+    event_type = event_types[status]
     payload = (
         event_payload.model_dump(mode="json")
-        if hasattr(event_payload, "model_dump")
+        if isinstance(event_payload, BaseModel)
         else dict(event_payload)
     )
     task = _task_envelope(conn, request.task_id, request.task_revision)

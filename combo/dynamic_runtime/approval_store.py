@@ -259,16 +259,12 @@ def _resource_scope_digest(
     capability_snapshot: CapabilitySnapshot,
     workspace_id: str,
 ) -> str:
-    definitions: list[dict[str, object]] = [projection.runtime_definition]
     payload = {
         "workspace_id": workspace_id,
         "capability_id": projection.capability_id,
         "revision": projection.revision,
         "content_digest": projection.content_digest,
-        "resource_bindings": [
-            definition.get("resource_bindings", [])
-            for definition in definitions
-        ],
+        "resource_bindings": [projection.runtime_definition.get("resource_bindings", [])],
     }
     encoded = json.dumps(
         payload,

@@ -5,6 +5,13 @@ from combo.model_pool.config import (
     model_pool_store_read_only,
     resolve_model_pool_store_path,
 )
+from combo.model_pool.embedding import (
+    ResolvedEmbeddingModel,
+    get_embedding_model,
+    get_embedding_model_settings,
+    reset_embedding_model,
+    resolve_embedding_model_profile,
+)
 from combo.model_pool.resolver import (
     ResolvedChatModelProfile,
     ResolvedImageGenerationProfile,
@@ -54,6 +61,7 @@ __all__ = [
     "ModelPoolRole",
     "ModelPoolSelector",
     "ModelPoolStore",
+    "ResolvedEmbeddingModel",
     "ModelSelectionRecommendation",
     "ModelSelectionCandidate",
     "ModelSelectionRequest",
@@ -66,6 +74,8 @@ __all__ = [
     "ResolvedChatModelProfile",
     "ResolvedImageGenerationProfile",
     "default_model_pool_store_path",
+    "get_embedding_model",
+    "get_embedding_model_settings",
     "list_model_pool_provider_profiles",
     "model_pool_store_read_only",
     "resolve_chat_model_profile",
@@ -74,4 +84,6 @@ __all__ = [
     "resolve_image_generation_binding",
     "resolve_image_generation_model_profile",
     "resolve_model_pool_store_path",
+    "resolve_embedding_model_profile",
+    "reset_embedding_model",
 ]

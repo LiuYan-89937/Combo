@@ -8,7 +8,7 @@ from combo.tooling.builtins.skill_installer.specs import (
     RUNTIME_IDENTITY_RESOURCE,
 )
 from combo.tooling.envelope import tool_envelope
-from combo.tooling.installers.service import CapabilityInstallerService
+from combo.tooling.builtins.runtime_ports import CapabilityInstallerPort
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -22,7 +22,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     service = resources.get(CAPABILITY_INSTALLER_RESOURCE)
     identity = resources.get(RUNTIME_IDENTITY_RESOURCE)
-    if not isinstance(service, CapabilityInstallerService):
+    if not isinstance(service, CapabilityInstallerPort):
         raise RuntimeError("capability installer runtime is not configured")
     if not isinstance(identity, RuntimeExecutionIdentity) or identity.runtime_role != "main":
         raise PermissionError("Skill installation is available only to the main Agent")

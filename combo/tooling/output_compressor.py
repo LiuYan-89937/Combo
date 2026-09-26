@@ -10,7 +10,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from combo.runtime_kernel.structured_output import (
+from combo.model_invocation.structured_output import (
     execute_structured_output_invocation,
     prepare_structured_output_invocation,
 )
