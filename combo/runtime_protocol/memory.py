@@ -8,7 +8,7 @@ from pydantic import Field, field_validator, model_validator
 from combo.runtime_protocol.contracts import FrozenProtocolModel, utc_now_text
 
 
-MemoryScope = Literal["user", "workspace"]
+MemoryScope = Literal["workspace", "session"]
 MemoryKind = Literal["constraint", "preference", "decision", "fact", "artifact"]
 MemoryStatus = Literal["active", "deleted"]
 
@@ -18,7 +18,8 @@ class MemoryRevision(FrozenProtocolModel):
     revision: int = Field(ge=1)
     principal_id: str
     scope: MemoryScope
-    workspace_id: str | None = None
+    workspace_id: str
+    session_id: str | None = None
     kind: MemoryKind
     status: MemoryStatus = "active"
     content: str
@@ -43,9 +44,16 @@ class MemoryRevision(FrozenProtocolModel):
 
     @field_validator("workspace_id")
     @classmethod
-    def _optional_workspace(cls, value: str | None) -> str | None:
+    def _required_workspace(cls, value: str) -> str:
         text = str(value or "").strip()
-        return text or None
+        if not text:
+            raise ValueError("memory workspace_id must not be empty")
+        return text
+
+    @field_validator("session_id")
+    @classmethod
+    def _optional_session(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
 
     @field_validator(
         "source_session_id",
@@ -59,10 +67,10 @@ class MemoryRevision(FrozenProtocolModel):
 
     @model_validator(mode="after")
     def _scope_and_digest_match(self) -> "MemoryRevision":
-        if self.scope == "workspace" and self.workspace_id is None:
-            raise ValueError("workspace memory requires workspace_id")
-        if self.scope == "user" and self.workspace_id is not None:
-            raise ValueError("user memory cannot carry workspace_id")
+        if self.scope == "session" and self.session_id is None:
+            raise ValueError("session memory requires session_id")
+        if self.scope == "workspace" and self.session_id is not None:
+            raise ValueError("workspace memory cannot carry session_id")
         provenance = (
             self.source_session_id,
             self.source_turn_id,

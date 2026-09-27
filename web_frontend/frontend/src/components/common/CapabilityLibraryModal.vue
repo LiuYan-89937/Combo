@@ -24,6 +24,10 @@
           <n-icon size="20"><SparklesOutline /></n-icon>
           <strong>Skill</strong>
         </button>
+        <button class="library-entry compact" type="button" @click="openRoute('MemoryPool')">
+          <n-icon size="20"><BookmarksOutline /></n-icon>
+          <strong>{{ t('memoryManagement.title') }}</strong>
+        </button>
         <button class="library-entry compact" type="button" @click="openRoute('ModelPool')">
           <n-icon size="20"><LayersOutline /></n-icon>
           <strong>模型池</strong>
@@ -47,6 +51,7 @@ import {
   ExtensionPuzzleOutline,
   ConstructOutline,
   LibraryOutline,
+  BookmarksOutline,
   SparklesOutline,
   TimeOutline,
   LayersOutline,
@@ -60,7 +65,7 @@ const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 const router = useRouter()
 const { t } = useI18n()
 
-function openRoute(name: 'Knowledge' | 'Scheduler' | 'ModelPool' | 'MainAgentCapabilities') {
+function openRoute(name: 'Knowledge' | 'Scheduler' | 'ModelPool' | 'MainAgentCapabilities' | 'MemoryPool') {
   emit('update:show', false)
   void router.push({ name })
 }

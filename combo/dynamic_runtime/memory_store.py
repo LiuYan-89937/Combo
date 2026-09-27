@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 from combo.context_system.memory_results import MemorySearchResult
@@ -9,7 +10,7 @@ from combo.dynamic_runtime.memory_search import HybridMemorySearchIndex
 
 
 class ScopedMemoryStore:
-    """Authoritative user/workspace memory revision store."""
+    """Authoritative workspace/session memory revision store."""
 
     def __init__(self, database: DynamicRuntimeDatabase, search_index: HybridMemorySearchIndex | None = None) -> None:
         self._database = database
@@ -19,12 +20,35 @@ class ScopedMemoryStore:
         if self._search_index is not None:
             self._search_index.close()
 
+    def legacy_user_memories(self, *, principal_id: str) -> tuple[dict[str, str], ...]:
+        """Expose retired global memories for explicit user review, never recall."""
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select archived.payload_json from legacy_user_memory_revisions archived
+                where archived.revision = (
+                  select max(revision) from legacy_user_memory_revisions
+                  where memory_id = archived.memory_id
+                )
+                and archived.principal_id = ? and archived.status = 'active'
+                order by archived.created_at desc
+                """,
+                (_required_text(principal_id, "principal_id"),),
+            ).fetchall()
+        return tuple({
+            "memory_id": str(value["memory_id"]),
+            "kind": str(value["kind"]),
+            "content": str(value["content"]),
+            "source_session_id": str(value.get("source_session_id") or ""),
+        } for row in rows if isinstance(value := json.loads(str(row["payload_json"])), dict))
+
     def write(
         self,
         *,
         principal_id: str,
         scope: MemoryScope,
-        workspace_id: str | None,
+        workspace_id: str,
+        session_id: str,
         kind: MemoryKind,
         content: str,
         confidence: float,
@@ -38,6 +62,7 @@ class ScopedMemoryStore:
             principal_id=principal_id,
             scope=scope,
             workspace_id=workspace_id,
+            session_id=session_id if scope == "session" else None,
             kind=kind,
             content=content,
             confidence=confidence,
@@ -54,7 +79,7 @@ class ScopedMemoryStore:
                 join memory_revisions as revision
                   on revision.memory_id = head.memory_id and revision.revision = head.revision
                 where head.principal_id = ? and head.scope = ?
-                  and head.workspace_id is ? and head.status = 'active'
+                  and head.workspace_id = ? and head.session_id is ? and head.status = 'active'
                   and head.content_digest = ?
                 order by head.updated_at desc limit 1
                 """,
@@ -62,6 +87,7 @@ class ScopedMemoryStore:
                     candidate.principal_id,
                     candidate.scope,
                     candidate.workspace_id,
+                    candidate.session_id,
                     candidate.content_digest,
                 ),
             ).fetchone()
@@ -72,8 +98,8 @@ class ScopedMemoryStore:
                 """
                 insert into memory_heads(
                   memory_id, revision, principal_id, scope, workspace_id,
-                  status, content_digest, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                  session_id, status, content_digest, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.memory_id,
@@ -81,6 +107,7 @@ class ScopedMemoryStore:
                     candidate.principal_id,
                     candidate.scope,
                     candidate.workspace_id,
+                    candidate.session_id,
                     candidate.status,
                     candidate.content_digest,
                     candidate.created_at,
@@ -122,6 +149,7 @@ class ScopedMemoryStore:
                 principal_id=current.principal_id,
                 scope=current.scope,
                 workspace_id=current.workspace_id,
+                session_id=current.session_id,
                 kind=current.kind,
                 status="deleted",
                 content=current.content,
@@ -149,6 +177,8 @@ class ScopedMemoryStore:
         *,
         memory_id: str,
         principal_id: str,
+        workspace_id: str,
+        session_id: str | None,
     ) -> MemoryRevision:
         """Delete a memory through the authenticated user-management surface."""
         with self._database.transaction() as conn:
@@ -163,6 +193,10 @@ class ScopedMemoryStore:
                 (_required_text(memory_id, "memory_id"),),
             ).fetchone()
             if row is None or str(row["principal_id"]) != principal_id:
+                raise LookupError(f"memory not found: {memory_id}")
+            if str(row["workspace_id"]) != workspace_id or (
+                str(row["scope"]) == "session" and str(row["session_id"]) != session_id
+            ):
                 raise LookupError(f"memory not found: {memory_id}")
             if str(row["status"]) != "active":
                 raise ValueError("memory is already deleted")
@@ -200,8 +234,8 @@ class ScopedMemoryStore:
         *,
         principal_id: str,
         workspace_id: str,
+        session_id: str | None,
         scope: MemoryScope | None = None,
-        all_workspaces: bool = False,
         limit: int | None = 100,
         offset: int = 0,
     ) -> tuple[MemoryRevision, ...]:
@@ -209,23 +243,21 @@ class ScopedMemoryStore:
             raise ValueError("memory list limit must be positive")
         if offset < 0:
             raise ValueError("memory list offset must not be negative")
-        clauses = ["head.principal_id = ?", "head.status = 'active'"]
-        parameters: list[object] = [_required_text(principal_id, "principal_id")]
-        if not all_workspaces:
-            if scope == "user":
-                clauses.append("head.scope = 'user'")
-            elif scope == "workspace":
-                clauses.append("head.scope = 'workspace' and head.workspace_id = ?")
-                parameters.append(_required_text(workspace_id, "workspace_id"))
-            else:
-                clauses.append("(head.scope = 'user' or head.workspace_id = ?)")
-                parameters.append(_required_text(workspace_id, "workspace_id"))
+        clauses = ["head.principal_id = ?", "head.status = 'active'", "head.workspace_id = ?"]
+        parameters: list[object] = [
+            _required_text(principal_id, "principal_id"),
+            _required_text(workspace_id, "workspace_id"),
+        ]
+        if scope == "workspace":
+            clauses.append("head.scope = 'workspace'")
+        elif scope == "session":
+            clauses.append("head.scope = 'session' and head.session_id = ?")
+            parameters.append(_required_text(session_id, "session_id"))
+        else:
+            clauses.append("(head.scope = 'workspace' or (head.scope = 'session' and head.session_id = ?))")
+            parameters.append(_required_text(session_id, "session_id"))
         limit_clause = "limit ? offset ?" if limit is not None else ""
-        order_clause = (
-            "head.updated_at desc, head.memory_id"
-            if all_workspaces else
-            "case head.scope when 'workspace' then 0 else 1 end, head.updated_at desc, head.memory_id"
-        )
+        order_clause = "case head.scope when 'session' then 0 else 1 end, head.updated_at desc, head.memory_id"
         if limit is not None:
             parameters.extend((limit, offset))
         with self._database.connection(query_only=True) as conn:
@@ -243,16 +275,43 @@ class ScopedMemoryStore:
             ).fetchall()
         return tuple(MemoryRevision.model_validate_json(str(row["payload_json"])) for row in rows)
 
+    def recalled_revisions(
+        self,
+        *,
+        principal_id: str,
+        workspace_id: str,
+        session_id: str,
+        references: tuple[tuple[str, int], ...],
+    ) -> tuple[MemoryRevision, ...]:
+        """Resolve exact model-input revisions within the requesting conversation's scope."""
+        if not references:
+            return ()
+        with self._database.connection(query_only=True) as conn:
+            revisions = []
+            for memory_id, revision in references:
+                row = conn.execute(
+                    """
+                    select payload_json from memory_revisions
+                    where memory_id = ? and revision = ? and principal_id = ?
+                      and workspace_id = ?
+                      and (scope = 'workspace' or (scope = 'session' and session_id = ?))
+                    """,
+                    (memory_id, revision, principal_id, workspace_id, session_id),
+                ).fetchone()
+                if row is not None:
+                    revisions.append(MemoryRevision.model_validate_json(str(row["payload_json"])))
+        return tuple(revisions)
+
     def search(
         self,
         *,
         principal_id: str,
         workspace_id: str,
+        session_id: str | None,
         query: str,
         limit: int,
         min_relevance: float = 0.0,
         scope: MemoryScope | None = None,
-        all_workspaces: bool = False,
     ) -> tuple[MemorySearchResult, ...]:
         if self._search_index is None:
             raise RuntimeError("memory search index is not configured")
@@ -261,24 +320,25 @@ class ScopedMemoryStore:
             for item in self._search_index.search(
                 principal_id=principal_id,
                 workspace_id=workspace_id,
+                session_id=session_id,
                 query=query,
                 limit=limit,
                 min_relevance=min_relevance,
                 scope=scope,
-                all_workspaces=all_workspaces,
             )
         )
 
-    def search_version(self, *, principal_id: str, workspace_id: str) -> str:
+    def search_version(self, *, principal_id: str, workspace_id: str, session_id: str) -> str:
         if self._search_index is None:
             raise RuntimeError("memory search index is not configured")
-        return self._search_index.version(principal_id=principal_id, workspace_id=workspace_id)
+        return self._search_index.version(principal_id=principal_id, workspace_id=workspace_id, session_id=session_id)
 
-    def active_references(self, *, principal_id: str, workspace_id: str) -> dict[str, tuple[int, str]]:
+    def active_references(self, *, principal_id: str, workspace_id: str, session_id: str) -> dict[str, tuple[int, str]]:
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
                 "select memory_id, revision, content_digest from memory_heads where status='active' and principal_id=? "
-                "and (scope='user' or workspace_id=?)", (principal_id, workspace_id),
+                "and workspace_id=? and (scope='workspace' or (scope='session' and session_id=?))",
+                (principal_id, workspace_id, session_id),
             ).fetchall()
         return {str(row["memory_id"]): (int(row["revision"]), str(row["content_digest"])) for row in rows}
 
@@ -287,10 +347,10 @@ class ScopedMemoryStore:
         conn.execute(
             """
             insert into memory_revisions(
-              memory_id, revision, principal_id, scope, workspace_id, kind,
+              memory_id, revision, principal_id, scope, workspace_id, session_id, kind,
               status, content_digest, payload_json, source_session_id,
               source_turn_id, created_by_runtime_instance_id, created_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 revision.memory_id,
@@ -298,6 +358,7 @@ class ScopedMemoryStore:
                 revision.principal_id,
                 revision.scope,
                 revision.workspace_id,
+                revision.session_id,
                 revision.kind,
                 revision.status,
                 revision.content_digest,
@@ -314,9 +375,10 @@ class ScopedMemoryStore:
         row = conn.execute(
             """
             select runtime.runtime_instance_id, runtime.session_id, runtime.turn_id,
-                   conversation.principal_id, conversation.workspace_id
+                   conversation.principal_id, conversation.workspace_id, workspace.mode as workspace_mode
             from runtime_instances as runtime
             join conversations as conversation on conversation.session_id = runtime.session_id
+            join workspaces as workspace on workspace.workspace_id = conversation.workspace_id
             where runtime.runtime_instance_id = ?
             """,
             (revision.created_by_runtime_instance_id,),
@@ -329,8 +391,12 @@ class ScopedMemoryStore:
             or str(row["principal_id"]) != revision.principal_id
         ):
             raise PermissionError("memory source identity does not match runtime ownership")
-        if revision.scope == "workspace" and str(row["workspace_id"]) != revision.workspace_id:
+        if str(row["workspace_id"]) != revision.workspace_id:
             raise PermissionError("workspace memory differs from runtime workspace")
+        if revision.scope == "workspace" and str(row["workspace_mode"]) != "project":
+            raise ValueError("workspace memory requires a shared workspace")
+        if revision.scope == "session" and str(row["session_id"]) != revision.session_id:
+            raise PermissionError("session memory differs from runtime session")
 
 
 def _now_text() -> str:
@@ -338,7 +404,7 @@ def _now_text() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _required_text(value: str, field_name: str) -> str:
+def _required_text(value: str | None, field_name: str) -> str:
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{field_name} must not be empty")

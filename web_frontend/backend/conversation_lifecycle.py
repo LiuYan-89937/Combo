@@ -475,6 +475,13 @@ class ConversationLifecycleService:
             memory_ids = tuple(str(row["memory_id"]) for row in memory_rows)
             _delete_memories(conn, memory_ids)
             conn.execute(
+                f"""delete from legacy_user_memory_revisions where memory_id in (
+                    select distinct memory_id from legacy_user_memory_revisions
+                    where source_session_id in ({session_placeholders})
+                )""",
+                plan.session_ids,
+            )
+            conn.execute(
                 f"delete from delegated_task_notifications where session_id in ({session_placeholders})",
                 plan.session_ids,
             )

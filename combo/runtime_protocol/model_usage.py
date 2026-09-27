@@ -8,6 +8,12 @@ from pydantic import Field, field_validator
 from combo.runtime_protocol.contracts import FrozenProtocolModel, utc_now_text
 
 
+class MemoryUsageReference(FrozenProtocolModel):
+    memory_id: str
+    revision: int = Field(ge=1)
+    origin: Literal["automatic", "explicit"]
+
+
 class RuntimeModelUsage(FrozenProtocolModel):
     usage_id: str = Field(default_factory=lambda: uuid4().hex)
     observation_event_id: str
@@ -33,6 +39,7 @@ class RuntimeModelUsage(FrozenProtocolModel):
     reasoning_tokens: int = Field(ge=0)
     cache_read_tokens: int = Field(ge=0)
     cache_write_tokens: int = Field(ge=0)
+    memory_references: tuple[MemoryUsageReference, ...] = ()
     usage_source: Literal[
         "provider_usage",
         "provider_usage_with_fallback",

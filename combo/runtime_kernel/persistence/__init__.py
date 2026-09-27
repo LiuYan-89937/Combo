@@ -13,7 +13,6 @@ from combo.runtime_kernel.persistence.memory_store import (
     LangGraphStoreConfig,
     LangGraphStoreFactory,
     LangGraphStoreHandle,
-    MemoryRecord,
     SqliteBaseStore,
 )
 
@@ -26,7 +25,6 @@ __all__ = [
     "LangGraphStoreConfig",
     "LangGraphStoreFactory",
     "LangGraphStoreHandle",
-    "MemoryRecord",
     "SqliteBaseStore",
     "close_shared_sqlite_checkpointers",
     "delete_checkpoint_thread",

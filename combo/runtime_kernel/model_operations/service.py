@@ -218,7 +218,10 @@ class ModelOperationService:
         _emit(
             emit_event,
             "model_call_started",
-            {"operation": "tool_bound_chat", "model_role": effective_model_role, "stream_id": stream_id},
+            {
+                "operation": "tool_bound_chat", "model_role": effective_model_role,
+                "stream_id": stream_id, "memory_references": list(envelope.memory_references),
+            },
         )
         try:
             response = _invoke_tool_bound_chat(
@@ -389,7 +392,11 @@ class ModelOperationService:
             _emit(
                 emit_event,
                 "model_call_started",
-                {"operation": "structured_json", "attempt": attempt, "max_attempts": attempts, **operation_context},
+                {
+                    "operation": "structured_json", "attempt": attempt, "max_attempts": attempts,
+                    "memory_references": list(envelope.memory_references) if envelope is not None else [],
+                    **operation_context,
+                },
             )
 
         def invoke_model(

@@ -56,6 +56,12 @@ from web_frontend.backend.attachment_upload_store import (
 SYSTEM_CHAT_PACKAGE_ID = "main_chat"
 
 
+class AgentInstructionsWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str
+    expected_digest: str
+
+
 class FrontendCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command: dict[str, Any]
@@ -103,6 +109,8 @@ class RuntimePreferencesWrite(BaseModel):
 class MemoryDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     memory_id: str
+    workspace_id: str
+    session_id: str | None = None
 
 
 class KnowledgeRetrievalSettingsWrite(BaseModel):
@@ -901,36 +909,91 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         target.unlink()
         return {"deleted": True, "path": target.relative_to(root).as_posix()}
 
+    @router.get("/api/agent/instructions")
+    async def agent_instructions(request: Request) -> dict[str, str]:
+        _principal(request)
+        return backend.read_agent_instructions()
+
+    @router.put("/api/agent/instructions")
+    async def replace_agent_instructions(request: Request, payload: AgentInstructionsWrite) -> dict[str, str]:
+        _principal(request)
+        try:
+            return backend.replace_agent_instructions(
+                content=payload.content, expected_digest=payload.expected_digest,
+            )
+        except RuntimeError as exc:
+            if str(exc) == "agent_instructions_changed":
+                raise HTTPException(status_code=409, detail="agent instructions changed") from exc
+            raise
+
+    def require_memory_scope(
+        *, principal_id: str, workspace_id: str | None, session_id: str | None,
+        scope: Literal["all", "workspace", "session"],
+    ) -> tuple[str, str | None]:
+        if not workspace_id or (scope != "workspace" and not session_id):
+            raise HTTPException(status_code=409, detail="memory scope requires a workspace or conversation")
+        try:
+            workspace = backend.application.stores.conversations.require_workspace(workspace_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="workspace not found") from exc
+        if workspace.principal_id != principal_id or workspace.status != "active":
+            raise HTTPException(status_code=404, detail="workspace not found")
+        if scope == "workspace" and workspace.mode != "project":
+            raise HTTPException(status_code=404, detail="workspace not found")
+        if session_id:
+            try:
+                conversation = backend.application.stores.conversations.require_identity(session_id)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail="conversation not found") from exc
+            if (conversation.principal_id != principal_id or conversation.workspace_id != workspace_id
+                    or conversation.status != "active"):
+                raise HTTPException(status_code=404, detail="conversation not found")
+        return workspace_id, session_id
+
+    @router.get("/api/memory/scopes")
+    async def memory_scopes(request: Request) -> dict[str, Any]:
+        conversations = backend.application.stores.conversations
+        principal_id = _principal(request)
+        return {
+            "workspaces": [
+                {"workspace_id": item.workspace_id, "title": item.title or item.workspace_id}
+                for item in conversations.list_workspaces_for_principal(principal_id)
+                if item.status == "active" and item.mode == "project"
+            ],
+            "sessions": [
+                {
+                    "session_id": item["session_id"],
+                    "workspace_id": item["workspace_id"],
+                    "title": item["display_title"],
+                }
+                for item in _session_views(backend, principal_id)
+            ],
+        }
+
     @router.get("/api/memory/query")
     async def memory_query(
         request: Request,
         query: str = "",
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=8, ge=1),
-        scope: Literal["all", "user", "workspace"] = "all",
+        scope: Literal["all", "workspace", "session"] = "all",
         workspace_id: str | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         principal_id = _principal(request)
-        if scope == "workspace":
-            if not workspace_id:
-                raise HTTPException(status_code=409, detail="active workspace is required")
-            try:
-                workspace = backend.application.stores.conversations.require_workspace(workspace_id)
-            except LookupError as exc:
-                raise HTTPException(status_code=404, detail="workspace not found") from exc
-            if workspace.principal_id != principal_id or workspace.status != "active":
-                raise HTTPException(status_code=404, detail="workspace not found")
+        workspace_id, session_id = require_memory_scope(
+            principal_id=principal_id, workspace_id=workspace_id, session_id=session_id, scope=scope,
+        )
         memory_scope = None if scope == "all" else scope
-        include_all_workspaces = scope == "all"
         store = backend.application.stores.memories
         if query.strip():
             results = store.search(
                 principal_id=principal_id,
-                workspace_id=workspace_id or "",
+                workspace_id=workspace_id,
+                session_id=session_id,
                 query=query,
                 limit=offset + limit + 1,
                 scope=memory_scope,
-                all_workspaces=include_all_workspaces,
             )[offset:]
         else:
             from combo.context_system.memory_results import MemorySearchResult
@@ -938,9 +1001,9 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 MemorySearchResult(revision=item, score=1.0)
                 for item in store.list_active(
                     principal_id=principal_id,
-                    workspace_id=workspace_id or "",
+                    workspace_id=workspace_id,
+                    session_id=session_id,
                     scope=memory_scope,
-                    all_workspaces=include_all_workspaces,
                     limit=limit + 1,
                     offset=offset,
                 )
@@ -956,14 +1019,14 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 "content": item.revision.content,
                 "score": item.score,
                 "metadata": {"confidence": item.revision.confidence},
-                "namespace": [item.revision.scope, item.revision.workspace_id or principal_id],
+                "namespace": [item.revision.scope, item.revision.session_id or item.revision.workspace_id],
                 "updated_at": item.revision.created_at,
             }
             for item in results
         ]
         return {
             "package_id": None,
-            "namespace": ["all", principal_id],
+            "namespace": ["all", workspace_id, session_id],
             "namespaces": [],
             "query": query,
             "next_offset": next_offset,
@@ -972,18 +1035,84 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             "report": {},
         }
 
+    @router.get("/api/memory/legacy-user")
+    async def legacy_user_memories(request: Request) -> dict[str, Any]:
+        return {"items": backend.application.stores.memories.legacy_user_memories(
+            principal_id=_principal(request),
+        )}
+
     @router.delete("/api/memory/items")
     async def delete_memory(request: Request, payload: MemoryDeleteRequest) -> dict[str, Any]:
         principal_id = _principal(request)
+        require_memory_scope(
+            principal_id=principal_id, workspace_id=payload.workspace_id, session_id=payload.session_id,
+            scope="session" if payload.session_id else "workspace",
+        )
         deleted = backend.application.stores.memories.delete_as_owner(
             memory_id=payload.memory_id,
             principal_id=principal_id,
+            workspace_id=payload.workspace_id,
+            session_id=payload.session_id,
         )
         return {
             "deleted": True,
             "memory_id": deleted.memory_id,
             "package_id": None,
-            "namespace": [deleted.scope, deleted.workspace_id or principal_id],
+            "namespace": [deleted.scope, deleted.session_id or deleted.workspace_id],
+        }
+
+    @router.get("/api/memory/recalled")
+    async def recalled_memories(request: Request, session_id: str) -> dict[str, Any]:
+        principal_id = _principal(request)
+        try:
+            conversation = backend.application.stores.conversations.require_identity(session_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="conversation not found") from exc
+        if conversation.principal_id != principal_id or conversation.status != "active":
+            raise HTTPException(status_code=404, detail="conversation not found")
+        with backend.application.database.connection(query_only=True) as connection:
+            turn = connection.execute(
+                """select turn_id, active_runtime_instance_id from conversation_turns
+                   where session_id = ? order by task_revision desc limit 1""",
+                (session_id,),
+            ).fetchone()
+            rows = connection.execute(
+                """select payload_json from runtime_model_usage
+                   where session_id = ? and turn_id = ? and principal_id = ? and runtime_role = 'main'
+                   order by created_at, usage_id""",
+                (session_id, str(turn["turn_id"]), principal_id),
+            ).fetchall() if turn is not None else ()
+        references: list[dict[str, Any]] = []
+        for row in rows:
+            references.extend(json.loads(str(row["payload_json"])).get("memory_references") or ())
+        if turn is not None and turn["active_runtime_instance_id"]:
+            for observation in backend.application.runtime_service.current_observations(
+                str(turn["active_runtime_instance_id"])
+            ):
+                if observation.get("event_type") == "model_call_started":
+                    references.extend((observation.get("payload") or {}).get("memory_references") or ())
+        ordered: dict[tuple[str, int], str] = {}
+        for reference in references:
+            memory_id = str(reference["memory_id"])
+            revision = int(reference["revision"])
+            ordered.setdefault((memory_id, revision), str(reference["origin"]))
+        revisions = backend.application.stores.memories.recalled_revisions(
+            principal_id=principal_id, workspace_id=conversation.workspace_id,
+            session_id=session_id, references=tuple(ordered),
+        )
+        return {
+            "turn_id": str(turn["turn_id"]) if turn is not None else None,
+            "items": [
+                {
+                    "memory_id": item.memory_id,
+                    "revision": item.revision,
+                    "source_scope": item.scope,
+                    "kind": item.kind,
+                    "content": item.content,
+                    "origin": ordered[(item.memory_id, item.revision)],
+                }
+                for item in revisions
+            ],
         }
 
     @router.get("/api/knowledge/sources")

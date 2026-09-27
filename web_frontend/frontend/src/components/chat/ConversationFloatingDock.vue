@@ -101,10 +101,10 @@
         <template #trigger>
           <button class="dock-card" type="button">
             <n-icon size="16"><SparklesOutline /></n-icon>
-            <span>{{ t('status.memory') }}</span>
+            <span>{{ t('status.memoryRecalled') }}</span>
           </button>
         </template>
-        <div class="dock-panel"><ConversationMemoryPanel :workspace-id="workspaceId" /></div>
+        <div class="dock-panel"><ConversationMemoryPanel :session-id="sessionId" :visible="uiStore.conversationDockPanel === 'memory'" /></div>
       </n-popover>
 
       <PlanCapsule

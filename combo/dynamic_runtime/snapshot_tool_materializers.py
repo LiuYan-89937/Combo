@@ -161,7 +161,7 @@ def _runtime_visible_tool_definition(
     return definition.model_copy(
         update={
             "model_description": (
-                "Search the current principal's user/workspace memories with action=search and query when "
+                "Search the current workspace and session memories with action=search and query when "
                 "automatic recall is insufficient. Selected contents are supplied as supplementary memory data. "
                 "Memory writes are unavailable in this runtime."
             ),

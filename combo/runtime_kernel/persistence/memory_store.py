@@ -10,32 +10,16 @@ import math
 from pathlib import Path
 import sqlite3
 from typing import Any, Literal, Mapping
-from uuid import uuid4
 
 from langgraph.store.base import BaseStore, GetOp, IndexConfig, Item, ListNamespacesOp, PutOp, SearchItem, SearchOp
 from langgraph.store.base.embed import AEmbeddingsFunc, EmbeddingsFunc, ensure_embeddings
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, ConfigDict, Field
 
 from combo.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
 LangGraphStoreBackend = Literal["sqlite", "memory", "postgres", "redis", "mongodb"]
 SQLITE_BUSY_TIMEOUT_MS = 10000
-
-
-class MemoryRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    memory_id: str = Field(default_factory=lambda: uuid4().hex)
-    scope: Literal["global", "agent", "user", "workspace"]
-    kind: Literal["fact", "preference", "decision", "constraint", "artifact"]
-    memory_type: Literal["semantic", "episodic", "procedural"] = "semantic"
-    content: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    source: dict[str, Any] = Field(default_factory=dict)
-    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 @dataclass(frozen=True, slots=True)

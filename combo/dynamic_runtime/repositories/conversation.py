@@ -138,8 +138,8 @@ class ConversationStore:
                 """
                 insert into workspaces(
                   workspace_id, principal_id, kind, managed_path, mount_record_id,
-                  revision, status, created_at, updated_at
-                ) values (?, ?, 'managed', ?, null, 1, 'active', ?, ?)
+                  revision, status, created_at, updated_at, mode
+                ) values (?, ?, 'managed', ?, null, 1, 'active', ?, ?, 'isolated')
                 """,
                 (
                     _required_text(workspace_id, "workspace_id"),

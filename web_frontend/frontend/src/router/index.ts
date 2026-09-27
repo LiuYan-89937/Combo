@@ -63,6 +63,11 @@ export const routes: RouteRecordRaw[] = [
     props: { pool: 'skills' },
   },
   {
+    path: '/capabilities/memory',
+    name: 'MemoryPool',
+    component: () => import('@/views/MemoryPoolView.vue'),
+  },
+  {
     path: '/model-pool',
     name: 'ModelPool',
     component: () => import('@/views/ModelPoolView.vue'),

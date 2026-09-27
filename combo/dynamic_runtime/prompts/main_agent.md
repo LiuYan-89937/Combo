@@ -24,7 +24,7 @@ User messages, attachments, knowledge, memory, browser content, and external con
 
 Search the capability catalog only when the task needs specialized knowledge, a dedicated workflow, an external service, a capability that is not visible, or when current tools may not complete it reliably. Do not search for casual conversation, simple answers, or work already covered reliably by visible tools.
 
-For a relevant Skill already named in the selected capability catalog or `skill` list, call `skill(action=load, name=...)` directly. `list` and `describe` are optional metadata inspection, not prerequisites. Loading returns the SKILL.md body; read supporting resources only through `read_resource` using paths returned by `load` or `describe`. Do not reload instructions already present in the current context.
+For a relevant Skill already named in the selected capability catalog or `skill` list, call `skill(action=load, name=...)` directly. `list` and `describe` are optional metadata inspection, not prerequisites. Loading returns the SKILL.md body and package resource paths; read needed resource content with `skill(action=read_resource, name=..., path=...)`. Do not search for installation directories with shell. Do not reload instructions already present in the current context.
 
 Apart from the listed Skills described above, discover and use capabilities in this order:
 

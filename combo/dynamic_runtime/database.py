@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v30"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v32"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1444,6 +1444,106 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 for table in ("memory_search_fts", "memory_search_documents", "memory_heads", "memory_revisions")
             ),
         ),
+        MigrationStep(
+            version=31,
+            name="workspace_and_session_memory_scopes",
+            statements=(
+                """
+                create table legacy_user_memory_revisions (
+                  memory_id text not null,
+                  revision integer not null,
+                  principal_id text not null,
+                  status text not null,
+                  payload_json text not null,
+                  source_session_id text,
+                  created_at text not null,
+                  primary key(memory_id, revision)
+                )
+                """,
+                """
+                insert into legacy_user_memory_revisions
+                select memory_id, revision, principal_id, status, payload_json, source_session_id, created_at
+                from memory_revisions where scope = 'user'
+                """,
+                "create index idx_legacy_user_memory_owner on legacy_user_memory_revisions(principal_id, memory_id, revision)",
+                "create index idx_legacy_user_memory_source on legacy_user_memory_revisions(source_session_id)",
+                "delete from memory_search_fts where memory_id in (select memory_id from memory_heads where scope = 'user')",
+                "delete from memory_search_documents where memory_id in (select memory_id from memory_heads where scope = 'user')",
+                "delete from memory_heads where scope = 'user'",
+                "delete from memory_revisions where scope = 'user'",
+                """
+                create table memory_revisions_v31 (
+                  memory_id text not null,
+                  revision integer not null check (revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  scope text not null check (scope in ('workspace','session')),
+                  workspace_id text not null references workspaces(workspace_id),
+                  session_id text references conversations(session_id),
+                  kind text not null check (kind in ('constraint','preference','decision','fact','artifact')),
+                  status text not null check (status in ('active','deleted')),
+                  content_digest text not null,
+                  payload_json text not null,
+                  source_session_id text references conversations(session_id),
+                  source_turn_id text references conversation_turns(turn_id),
+                  created_by_runtime_instance_id text references runtime_instances(runtime_instance_id),
+                  created_at text not null,
+                  primary key(memory_id, revision),
+                  check ((scope = 'workspace' and session_id is null)
+                    or (scope = 'session' and session_id is not null))
+                )
+                """,
+                """
+                insert into memory_revisions_v31 (
+                  memory_id, revision, principal_id, scope, workspace_id, session_id,
+                  kind, status, content_digest, payload_json, source_session_id,
+                  source_turn_id, created_by_runtime_instance_id, created_at
+                )
+                select memory_id, revision, principal_id, scope, workspace_id, null,
+                       kind, status, content_digest, payload_json, source_session_id,
+                       source_turn_id, created_by_runtime_instance_id, created_at
+                from memory_revisions
+                """,
+                """
+                create table memory_heads_v31 (
+                  memory_id text primary key,
+                  revision integer not null check (revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  scope text not null check (scope in ('workspace','session')),
+                  workspace_id text not null references workspaces(workspace_id),
+                  session_id text references conversations(session_id),
+                  status text not null check (status in ('active','deleted')),
+                  content_digest text not null,
+                  updated_at text not null,
+                  foreign key(memory_id, revision) references memory_revisions_v31(memory_id, revision),
+                  check ((scope = 'workspace' and session_id is null)
+                    or (scope = 'session' and session_id is not null))
+                )
+                """,
+                """
+                insert into memory_heads_v31 (
+                  memory_id, revision, principal_id, scope, workspace_id, session_id,
+                  status, content_digest, updated_at
+                )
+                select memory_id, revision, principal_id, scope, workspace_id, null,
+                       status, content_digest, updated_at
+                from memory_heads
+                """,
+                "drop table memory_heads",
+                "drop table memory_revisions",
+                "alter table memory_revisions_v31 rename to memory_revisions",
+                "alter table memory_heads_v31 rename to memory_heads",
+                "create index idx_memory_revisions_owner on memory_revisions(principal_id, scope, workspace_id, session_id, created_at)",
+                "create index idx_memory_revisions_digest on memory_revisions(principal_id, scope, workspace_id, session_id, content_digest)",
+                "create index idx_memory_heads_owner on memory_heads(principal_id, scope, workspace_id, session_id, status, updated_at)",
+            ),
+        ),
+        MigrationStep(
+            version=32,
+            name="model_usage_by_conversation_turn",
+            statements=(
+                "create index idx_runtime_model_usage_turn on runtime_model_usage(session_id, turn_id, created_at)",
+            ),
+        ),
     )
 
 
@@ -1510,8 +1610,12 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_runtime_model_usage_created"),
         ("index", "idx_runtime_model_usage_profile"),
         ("index", "idx_runtime_model_usage_runtime"),
+        ("index", "idx_runtime_model_usage_turn"),
         ("index", "idx_runtime_model_usage_workspace"),
         ("table", "memory_revisions"),
+        ("table", "legacy_user_memory_revisions"),
+        ("index", "idx_legacy_user_memory_owner"),
+        ("index", "idx_legacy_user_memory_source"),
         ("index", "idx_memory_revisions_owner"),
         ("index", "idx_memory_revisions_digest"),
         ("table", "memory_heads"),

@@ -19,6 +19,7 @@ def memory_item_payload(item: ContextCandidate) -> dict:
         "revision": metadata.get("revision"),
         "scope": metadata.get("scope"),
         "workspace_id": metadata.get("workspace_id"),
+        "session_id": metadata.get("session_id"),
         "kind": metadata.get("memory_kind"),
         "source_session_id": metadata.get("source_session_id"),
         "source_turn_id": metadata.get("source_turn_id"),

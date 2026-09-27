@@ -10,6 +10,7 @@ SKILL_TOOL_DESCRIPTION = (
     "not prerequisites. For a Skill discovered through capability search, use capability action=describe "
     "to obtain its exact definition before loading, unless that definition is already in context. "
     "load returns the SKILL.md body; read_resource only reads a path listed by describe or load. "
+    "Skill identities are logical references, not filesystem paths; do not search the host for an installation directory. "
     "Do not reload instructions already present in the current context. Main Agents may load active searched "
     "Skills; child Agents may load only Skills selected for their runtime. Loading affects this runtime only."
 )

@@ -63,6 +63,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                              min_relevance=policy.min_relevance)
         candidates = [memory_candidate(item, origin="explicit") for item in store.search(
             principal_id=identity.principal_id, workspace_id=identity.workspace_id,
+            session_id=identity.session_id,
             query=query_text, limit=policy.max_candidates, min_relevance=policy.min_relevance,
         )]
         frame = assemble_context_frame(
@@ -84,7 +85,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         revision = store.write(
             principal_id=identity.principal_id,
             scope=scope,
-            workspace_id=identity.workspace_id if scope == "workspace" else None,
+            workspace_id=identity.workspace_id,
+            session_id=identity.session_id,
             kind=_memory_kind(arguments.get("kind")),
             content=_required_text(arguments, "content"),
             confidence=float(arguments.get("confidence", 1)),
@@ -111,8 +113,8 @@ def _required_text(arguments: dict[str, Any], name: str) -> str:
 
 
 def _memory_scope(value: Any) -> MemoryScope:
-    if value not in {"user", "workspace"}:
-        raise ValueError("memory scope must be user or workspace")
+    if value not in {"workspace", "session"}:
+        raise ValueError("memory scope must be workspace or session")
     return value
 
 

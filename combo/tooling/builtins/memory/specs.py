@@ -6,7 +6,7 @@ from combo.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 MEMORY_STORE_RESOURCE = "memory_store"
 RUNTIME_IDENTITY_RESOURCE = "runtime_identity"
 MEMORY_TOOL_DESCRIPTION = (
-    "Search cross-session user/workspace memories when the automatically recalled context is insufficient. "
+    "Search memories visible to this workspace and session when automatic recall is insufficient. "
     "Use action=search with a focused query about the missing prior decision, preference, constraint, fact, "
     "or artifact. The runtime supplies selected contents as supplementary memory data under a shared budget. "
     "Use action=write to persist one durable memory established in the current turn. "
@@ -44,7 +44,7 @@ def _input_schema() -> dict:
         {
             "type": "object",
             "properties": {
-                "action": {"const": "search", "description": "按明确主题检索跨会话记忆。"},
+                "action": {"const": "search", "description": "按明确主题检索当前工作区和会话可见的记忆。"},
                 "query": {"type": "string", "minLength": 1,
                           "description": "当前任务缺少的历史决定、约束、偏好、事实或产物；不要复制工具输出。"},
             },
@@ -55,11 +55,11 @@ def _input_schema() -> dict:
 
 
 def _write_schema() -> dict:
-    scope = {"type": "string", "enum": ["user", "workspace"], "description": "user 为用户全局记忆，workspace 为当前工作区记忆。"}
+    scope = {"type": "string", "enum": ["workspace", "session"], "description": "workspace 仅适用于共享工作区，独立会话只能写入 session 记忆。Agent.md 只能由用户编辑。"}
     return {
         "type": "object",
         "properties": {
-            "action": {"const": "write", "description": "创建一条新的跨会话记忆 revision。"},
+            "action": {"const": "write", "description": "创建一条新的工作区或当前会话记忆 revision。"},
             "scope": scope,
             "kind": {
                 "type": "string",
@@ -69,7 +69,7 @@ def _write_schema() -> dict:
             "content": {
                 "type": "string",
                 "minLength": 1,
-                "description": "需要跨会话保留的独立、明确内容。",
+                "description": "需要在选定范围内保留的独立、明确内容。",
             },
             "confidence": {
                 "type": "number",

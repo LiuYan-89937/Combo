@@ -117,6 +117,12 @@
           </header>
 
           <div class="group-body">
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.agentInstructions') }}</label>
+              <AgentInstructionsEditor />
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
             <div class="field-row">
               <div class="field-copy">
                 <label class="field-label">{{ t('settings.memoryAutoRecall') }}</label>
@@ -476,6 +482,7 @@ import { useAppUpdateStore } from '@/stores/appUpdate'
 import { storageApi, type ConversationStorageUsage } from '@/api/storage'
 import ComboLogo from '@/components/brand/ComboLogo.vue'
 import ErrorReportButton from '@/components/common/ErrorReportButton.vue'
+import AgentInstructionsEditor from '@/components/common/AgentInstructionsEditor.vue'
 import { knowledgeApi, type KnowledgeRetrievalSettings } from '@/api/knowledge'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'

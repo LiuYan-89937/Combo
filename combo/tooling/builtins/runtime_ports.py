@@ -100,12 +100,12 @@ class SchedulerRuntimePort(Protocol):
 @runtime_checkable
 class MemoryRuntimePort(Protocol):
     def search(
-        self, *, principal_id: str, workspace_id: str, query: str, limit: int,
+        self, *, principal_id: str, workspace_id: str, session_id: str, query: str, limit: int,
         min_relevance: float = 0.0,
     ) -> tuple[MemorySearchResult, ...]: ...
 
     def write(
-        self, *, principal_id: str, scope: MemoryScope, workspace_id: str | None,
+        self, *, principal_id: str, scope: MemoryScope, workspace_id: str, session_id: str,
         kind: MemoryKind, content: str, confidence: float,
         source_session_id: str, source_turn_id: str, runtime_instance_id: str,
     ) -> MemoryRevision: ...

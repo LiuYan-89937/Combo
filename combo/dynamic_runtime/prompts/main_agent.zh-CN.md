@@ -24,7 +24,7 @@
 
 仅当任务需要专业知识、固定工作流、外部服务、当前不可见的能力，或现有工具可能无法可靠完成时搜索能力目录。寒暄、简单回答和当前工具已可靠覆盖的工作不需要搜索。
 
-对于已出现在已选择能力目录或 `skill` 列表中的相关 Skill，直接调用 `skill(action=load, name=...)`。`list` 和 `describe` 仅用于按需查看元数据，不是加载前置步骤。`load` 返回 SKILL.md 正文；附属资源只通过 `read_resource` 按 `load` 或 `describe` 返回的路径读取。当前上下文已有正文时不要重复加载。
+对于已出现在已选择能力目录或 `skill` 列表中的相关 Skill，直接调用 `skill(action=load, name=...)`。`list` 和 `describe` 仅用于按需查看元数据，不是加载前置步骤。`load` 返回 SKILL.md 正文及包内资源路径；需要资源正文时，通过 `skill(action=read_resource, name=..., path=...)` 读取，不要用 shell 搜索安装目录。当前上下文已有正文时不要重复加载。
 
 除上述已列出的 Skill 外，发现和使用能力时遵循：
 

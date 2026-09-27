@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from combo.dynamic_runtime.agent_instructions import AgentInstructionStore
 from combo.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from combo.runtime_attachments import (
     import_runtime_attachments,
@@ -190,6 +191,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         *,
         prompt_provider: FileSystemPromptProvider,
         child_prompt_provider: FileSystemPromptProvider,
+        agent_instructions: AgentInstructionStore,
         clock: RuntimeClock,
         workspaces: WorkspaceLaunchResolver,
         attachments: AttachmentLaunchResolver,
@@ -198,6 +200,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
     ) -> None:
         self._prompt_provider = prompt_provider
         self._child_prompt_provider = child_prompt_provider
+        self._agent_instructions = agent_instructions
         self._clock = clock
         self._workspaces = workspaces
         self._attachments = attachments
@@ -276,7 +279,8 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
                 event_ids=notification_event_ids,
             )
         capability_instructions = self._capability_instructions.render(capability_snapshot, locale=locale)
-        system_prompt = base_prompt
+        agent_text = self._agent_instructions.read()["content"].strip() if request.runtime_role == "main" else ""
+        system_prompt = f"{base_prompt}\n\n# Agent.md\n{agent_text}" if agent_text else base_prompt
         turn_directives = _turn_directives(
             delegated=delegated_directives,
             force_collaboration=request.runtime_role == "main" and request.force_collaboration,

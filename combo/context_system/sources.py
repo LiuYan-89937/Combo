@@ -12,10 +12,10 @@ from combo.runtime_protocol import RuntimeExecutionIdentity
 
 
 class ScopedMemorySearchStore(Protocol):
-    def search(self, *, principal_id: str, workspace_id: str, query: str, limit: int,
+    def search(self, *, principal_id: str, workspace_id: str, session_id: str, query: str, limit: int,
                min_relevance: float = 0.0) -> tuple[MemorySearchResult, ...]: ...
-    def search_version(self, *, principal_id: str, workspace_id: str) -> str: ...
-    def active_references(self, *, principal_id: str, workspace_id: str) -> dict[str, tuple[int, str]]: ...
+    def search_version(self, *, principal_id: str, workspace_id: str, session_id: str) -> str: ...
+    def active_references(self, *, principal_id: str, workspace_id: str, session_id: str) -> dict[str, tuple[int, str]]: ...
 
 
 class ContextSource(Protocol):
@@ -50,19 +50,22 @@ class ScopedMemoryContextSource:
 
     def version(self, *, runtime_context: ContextSourceRuntime) -> str:
         identity = runtime_context.memory_identity()
-        return self._store.search_version(principal_id=identity.principal_id, workspace_id=identity.workspace_id)
+        return self._store.search_version(principal_id=identity.principal_id, workspace_id=identity.workspace_id,
+                                          session_id=identity.session_id)
 
     def retrieve(self, *, query: ContextQuery, runtime_context: ContextSourceRuntime) -> list[ContextCandidate]:
         identity = runtime_context.memory_identity()
         results = self._store.search(
             principal_id=identity.principal_id, workspace_id=identity.workspace_id,
+            session_id=identity.session_id,
             query=query.text, limit=query.limit, min_relevance=query.min_relevance,
         )
         return [memory_candidate(item) for item in results]
 
     def validate(self, candidates: list[ContextCandidate], *, runtime_context: ContextSourceRuntime) -> list[ContextCandidate]:
         identity = runtime_context.memory_identity()
-        refs = self._store.active_references(principal_id=identity.principal_id, workspace_id=identity.workspace_id)
+        refs = self._store.active_references(principal_id=identity.principal_id, workspace_id=identity.workspace_id,
+                                             session_id=identity.session_id)
         validated: list[ContextCandidate] = []
         for item in candidates:
             memory_id = item.metadata.get("memory_id")
@@ -88,7 +91,8 @@ def memory_candidate(result: MemorySearchResult, *, origin: str = "automatic") -
         metadata={
             "memory_id": revision.memory_id, "revision": revision.revision,
             "principal_id": revision.principal_id, "scope": revision.scope,
-            "workspace_id": revision.workspace_id, "memory_kind": revision.kind,
+            "workspace_id": revision.workspace_id, "session_id": revision.session_id,
+            "memory_kind": revision.kind,
             "content_digest": revision.content_digest, "confidence": revision.confidence,
             "source_session_id": revision.source_session_id, "source_turn_id": revision.source_turn_id,
             "created_at": revision.created_at, "retrieval_origin": origin,

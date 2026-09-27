@@ -2,7 +2,7 @@ import { requestJson, withQuery } from './http'
 
 export interface MemoryContextItemView {
   memory_id: string
-  source_scope: 'workspace' | 'user'
+  source_scope: 'workspace' | 'session'
   memory_type: string
   kind: string
   content: string
@@ -30,19 +30,48 @@ export interface MemoryDeleteResponse {
   namespace: string[]
 }
 
-export type MemoryScopeFilter = 'all' | 'user' | 'workspace'
+export interface LegacyUserMemoryView {
+  memory_id: string
+  kind: string
+  content: string
+  source_session_id: string
+}
+
+export interface RecalledMemoryView {
+  memory_id: string
+  revision: number
+  source_scope: 'workspace' | 'session'
+  kind: string
+  content: string
+  origin: 'automatic' | 'explicit'
+}
+
+export interface MemoryScopesResponse {
+  workspaces: Array<{ workspace_id: string; title: string }>
+  sessions: Array<{ session_id: string; workspace_id: string; title: string }>
+}
+
+export type MemoryScopeFilter = 'all' | 'workspace' | 'session'
 
 export const memoryApi = {
-  query: (query: string, offset = 0, scope: MemoryScopeFilter = 'all', workspaceId: string | null = null) =>
+  scopes: () => requestJson<MemoryScopesResponse>('/api/memory/scopes'),
+  recalled: (sessionId: string) =>
+    requestJson<{ turn_id: string | null; items: RecalledMemoryView[] }>(
+      withQuery('/api/memory/recalled', { session_id: sessionId }),
+    ),
+  legacyUserMemories: () =>
+    requestJson<{ items: LegacyUserMemoryView[] }>('/api/memory/legacy-user'),
+  query: (query: string, offset = 0, scope: MemoryScopeFilter = 'all', workspaceId: string | null = null, sessionId: string | null = null) =>
     requestJson<MemoryQueryResponse>(withQuery('/api/memory/query', {
       query,
       offset,
       scope,
       workspace_id: workspaceId || undefined,
+      session_id: sessionId || undefined,
     })),
-  deleteItem: (memoryId: string) =>
+  deleteItem: (memoryId: string, workspaceId: string, sessionId: string | null) =>
     requestJson<MemoryDeleteResponse>('/api/memory/items', {
       method: 'DELETE',
-      body: JSON.stringify({ memory_id: memoryId }),
+      body: JSON.stringify({ memory_id: memoryId, workspace_id: workspaceId, session_id: sessionId }),
     }),
 }

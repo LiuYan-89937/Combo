@@ -303,6 +303,7 @@ def project_model_usage_records(
                 reasoning_tokens=int(payload.get("reasoning_tokens") or 0),
                 cache_read_tokens=int(payload.get("cache_read_tokens") or 0),
                 cache_write_tokens=int(payload.get("cache_write_tokens") or 0),
+                memory_references=tuple((payload.get("model_input") or {}).get("memory_references") or ()),
                 usage_source=usage_source,
                 created_at=str(observation.get("created_at") or ""),
             )

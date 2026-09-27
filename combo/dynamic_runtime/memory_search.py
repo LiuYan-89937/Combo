@@ -41,14 +41,14 @@ class HybridMemorySearchIndex:
         self._pending_refresh = False
         self._closed = False
 
-    def version(self, *, principal_id: str, workspace_id: str) -> str:
+    def version(self, *, principal_id: str, workspace_id: str, session_id: str) -> str:
         runtime = self._resolve_runtime()
         with self._database.connection(query_only=True) as conn:
             conn.execute("begin")
             heads = conn.execute(
                 "select memory_id, revision, status from memory_heads where principal_id=? "
-                "and (scope='user' or workspace_id=?) order by memory_id",
-                (principal_id, workspace_id),
+                "and workspace_id=? and (scope='workspace' or (scope='session' and session_id=?)) order by memory_id",
+                (principal_id, workspace_id, session_id),
             ).fetchall()
             active = self._active(conn)
         return _digest({
@@ -98,12 +98,13 @@ class HybridMemorySearchIndex:
             self._future.add_done_callback(self._after_build)
 
     def search(
-        self, *, principal_id: str, workspace_id: str, query: str, limit: int,
+        self, *, principal_id: str, workspace_id: str, session_id: str | None, query: str, limit: int,
         min_relevance: float = 0.0, scope: MemoryScope | None = None,
-        all_workspaces: bool = False,
     ) -> tuple[RankedMemory, ...]:
         if limit < 1 or not lexical_tokens(query):
             return ()
+        if scope != "workspace" and not session_id:
+            raise ValueError("session_id is required for session memory search")
         self.refresh()
         # Read one SQLite snapshot. Index retirement cannot mix revisions or
         # delete vectors between the lexical and semantic reads of this search.
@@ -113,26 +114,23 @@ class HybridMemorySearchIndex:
             if generation is None:
                 return ()
             generation_id = generation["generation_id"]
-            if all_workspaces:
-                scope_condition = "1 = 1"
+            if scope == "workspace":
+                scope_condition = "head.scope='workspace'"
                 scope_parameters: tuple[str, ...] = ()
-            elif scope == "user":
-                scope_condition = "head.scope='user'"
-                scope_parameters = ()
-            elif scope == "workspace":
-                scope_condition = "head.scope='workspace' and head.workspace_id=?"
-                scope_parameters = (workspace_id,)
+            elif scope == "session":
+                scope_condition = "head.scope='session' and head.session_id=?"
+                scope_parameters = (session_id,)
             else:
-                scope_condition = "(head.scope='user' or head.workspace_id=?)"
-                scope_parameters = (workspace_id,)
+                scope_condition = "(head.scope='workspace' or (head.scope='session' and head.session_id=?))"
+                scope_parameters = (session_id,)
             rows = conn.execute(
                 "select revision.payload_json, document.embedding_json "
                 "from memory_search_documents document join memory_heads head "
                 "on head.memory_id=document.memory_id and head.revision=document.memory_revision "
                 "join memory_revisions revision on revision.memory_id=head.memory_id and revision.revision=head.revision "
-                "where document.generation_id=? and head.status='active' and head.principal_id=? "
+                "where document.generation_id=? and head.status='active' and head.principal_id=? and head.workspace_id=? "
                 f"and {scope_condition}",
-                (generation_id, principal_id, *scope_parameters),
+                (generation_id, principal_id, workspace_id, *scope_parameters),
             ).fetchall()
             allowed = {}
             vectors = {}

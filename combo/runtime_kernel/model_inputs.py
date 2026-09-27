@@ -67,6 +67,7 @@ class ModelInputEnvelope:
     image_attachment_count: int = 0
     memory_context_chars: int = 0
     memory_selected_ids: tuple[str, ...] = ()
+    memory_references: tuple[dict[str, Any], ...] = ()
 
     def diagnostics(self) -> dict[str, Any]:
         return {
@@ -83,6 +84,7 @@ class ModelInputEnvelope:
             "image_attachment_count": self.image_attachment_count,
             "memory_context_chars": self.memory_context_chars,
             "memory_selected_ids": list(self.memory_selected_ids),
+            "memory_references": list(self.memory_references),
         }
 
 
@@ -127,7 +129,7 @@ def build_runtime_model_input(
                 },
             )
         )
-    history_messages, memory_text, memory_ids = _with_memory_context(
+    history_messages, memory_text, memory_ids, memory_references = _with_memory_context(
         state=state, node_id=node_id, messages=history_messages,
         system_messages=system_messages, tools=tools,
     )
@@ -147,6 +149,7 @@ def build_runtime_model_input(
         image_attachment_count=visual_attachment_count,
         memory_context_chars=len(memory_text),
         memory_selected_ids=memory_ids,
+        memory_references=memory_references,
     )
 
 
@@ -163,9 +166,7 @@ def _runtime_context_sections(state: RuntimeState) -> list[tuple[str, str]]:
     capability_instructions = runtime_config.capability_instructions.strip()
     if capability_instructions:
         sections.append(("runtime_capability_catalog", capability_instructions))
-    mount_guidance = _workspace_mount_guidance(state)
-    if mount_guidance:
-        sections.append(("runtime_workspace_context", mount_guidance))
+    sections.append(("runtime_workspace_context", _workspace_context_guidance(state)))
     temporal_context = runtime_config.temporal_context.strip()
     if temporal_context:
         sections.append(("runtime_temporal_context", temporal_context))
@@ -177,22 +178,22 @@ def _runtime_context_sections(state: RuntimeState) -> list[tuple[str, str]]:
     return sections
 
 
-def _workspace_mount_guidance(state: RuntimeState) -> str:
+def _workspace_context_guidance(state: RuntimeState) -> str:
     runtime_config = state.runtime_config
     paths = [
         f"{runtime_config.workspace_root_alias.rstrip('/')}/{name}"
         for item in runtime_config.workspace_mounts
         if (name := str(item.get("name") or "").strip())
     ]
-    if not paths:
-        return ""
-    joined_paths = ", ".join(paths)
     if _runtime_locale(state) == "zh-CN":
-        return f"用户已将这些本地目录挂载到当前工作区：{joined_paths}。它们实时指向原始文件，仅在任务确实需要时读写。"
-    return (
-        f"The user mounted these local directories into the current workspace: {joined_paths}. "
-        "They are live links to the original files. Read and modify them only when the task requires it."
-    )
+        guidance = "shell 每次调用都从当前运行时的工作区根目录启动；在根目录执行命令时不要先 cd，也无需传 cwd。需要在子目录执行时传相对 cwd。"
+        if paths:
+            guidance += f"用户已将这些本地目录挂载到当前工作区：{', '.join(paths)}。它们实时指向原始文件，仅在任务确实需要时读写。"
+        return guidance
+    guidance = "Each shell invocation starts in this runtime's workspace root. Do not cd to that root or set cwd for it; use a relative cwd for a subdirectory."
+    if paths:
+        guidance += f" The user mounted these local directories into the workspace: {', '.join(paths)}. They point to the original files; read or modify them only when needed."
+    return guidance
 
 
 def _runtime_locale(state: RuntimeState) -> RuntimeLocale:
@@ -323,13 +324,13 @@ def _runtime_attachments_text(state: RuntimeState, *, include_extracted_text_for
 def _with_memory_context(
     *, state: RuntimeState, node_id: str | None, messages: list[Any],
     system_messages: list[Any], tools: list[BaseTool],
-) -> tuple[list[Any], str, tuple[str, ...]]:
+) -> tuple[list[Any], str, tuple[str, ...], tuple[dict[str, Any], ...]]:
     snapshot = read_memory_snapshot(state, node_id=node_id) if node_id is not None else None
     if snapshot is None:
-        return project_memory_tool_messages(messages, selected_ids=set()), "", ()
+        return project_memory_tool_messages(messages, selected_ids=set()), "", (), ()
     target_index = _current_user_message_index(state=state, messages=messages)
     if target_index is None:
-        return project_memory_tool_messages(messages, selected_ids=set()), "", ()
+        return project_memory_tool_messages(messages, selected_ids=set()), "", (), ()
     selected = set(snapshot.selected_ids)
     items = [item for item in snapshot.candidates if item.candidate_id in selected]
     by_id = {item.candidate_id: item for item in items}
@@ -355,7 +356,14 @@ def _with_memory_context(
         tokens = estimate_messages_tokens([*system_messages, *projected]) + tool_tokens
         if not items or (estimate_text_tokens(text) <= snapshot.max_tokens
                          and (not request_limit or tokens <= request_limit)):
-            return projected, text, tuple(item.candidate_id for item in items)
+            return projected, text, tuple(item.candidate_id for item in items), tuple(
+                {
+                    "memory_id": item.metadata["memory_id"],
+                    "revision": item.metadata["revision"],
+                    "origin": item.metadata.get("retrieval_origin", "automatic"),
+                }
+                for item in items
+            )
         items.pop()
 
 

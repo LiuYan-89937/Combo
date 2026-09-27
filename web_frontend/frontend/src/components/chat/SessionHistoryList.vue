@@ -224,7 +224,7 @@ function sessionTitle(session: SessionHistoryItem): string {
 function workspaceKind(session: SessionHistoryItem): string {
   return session.workspace?.mode === 'project'
     ? t('sessions.sharedWorkspace')
-    : t('sessions.isolatedWorkspace')
+    : t('sessions.independentSession')
 }
 
 function canRevealSession(session: SessionHistoryItem): boolean {

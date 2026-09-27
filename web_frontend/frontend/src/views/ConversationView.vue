@@ -293,6 +293,7 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
     packageId
     && !agentStore.selectedSessionId
     && !runtimeStore.activeWorkspaceId
+    && route.query.independent !== '1'
   ) {
     pendingWorkspaceAction.value = {
       kind: 'first_message',

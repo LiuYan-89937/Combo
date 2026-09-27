@@ -69,9 +69,9 @@
     </div>
 
     <div v-else class="new-session-options">
-      <button type="button" class="new-session-option" :disabled="creatingIsolatedWorkspace" @click="createIsolatedWorkspace">
-        <strong>{{ t('sessions.newIndependentTask') }}</strong>
-        <span>{{ t('sessions.newIndependentTaskDescription') }}</span>
+      <button type="button" class="new-session-option" @click="selectWorkspace(null)">
+        <strong>{{ t('sessions.newIndependentSession') }}</strong>
+        <span>{{ t('sessions.newIndependentSessionDescription') }}</span>
       </button>
 
       <section class="new-session-option shared-workspace-option">
@@ -190,7 +190,6 @@ const workspaces = ref<WorkspaceProjectView[]>([])
 const selectedWorkspaceId = ref<string | null>(null)
 const selectingLinkedWorkspace = ref(false)
 const creatingLinkedWorkspace = ref(false)
-const creatingIsolatedWorkspace = ref(false)
 const directoryStep = ref(false)
 const gitImportStep = ref(false)
 const directoryLoading = ref(false)
@@ -203,7 +202,7 @@ const linkedWorkspaceBusy = computed(() => (
   selectingLinkedWorkspace.value || creatingLinkedWorkspace.value
 ))
 const dialogClosable = computed(() => (
-  !linkedWorkspaceBusy.value && !creatingIsolatedWorkspace.value && !directoryLoading.value
+  !linkedWorkspaceBusy.value && !directoryLoading.value
 ))
 const dialogTitle = computed(() => (
   gitImportStep.value
@@ -261,24 +260,6 @@ async function refreshWorkspaces() {
 function selectWorkspace(workspaceId: string | null) {
   emit('create', workspaceId)
   emit('update:show', false)
-}
-
-async function createIsolatedWorkspace() {
-  if (creatingIsolatedWorkspace.value) return
-  creatingIsolatedWorkspace.value = true
-  try {
-    const response = await workspaceApi.createProject({
-      title: t('sessions.newIndependentTask'),
-      mode: 'isolated',
-      root_kind: 'managed',
-      owner_package_id: null,
-    })
-    selectWorkspace(response.workspace.workspace_id)
-  } catch (error) {
-    showError(error)
-  } finally {
-    creatingIsolatedWorkspace.value = false
-  }
 }
 
 async function chooseLinkedWorkspace() {

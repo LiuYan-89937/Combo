@@ -22,7 +22,7 @@ export function useAgentSessionNavigation() {
     const normalizedWorkspaceId = String(workspaceId || '').trim() || null
     await router.push({
       name: 'ChatNew',
-      query: normalizedWorkspaceId ? { workspace: normalizedWorkspaceId } : {},
+      query: normalizedWorkspaceId ? { workspace: normalizedWorkspaceId } : workspaceId === null ? { independent: '1' } : {},
     })
   }
 
