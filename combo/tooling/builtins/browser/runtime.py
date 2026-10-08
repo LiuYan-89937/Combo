@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from combo.tooling.execution_context import register_runtime_tool_cancellation
+from combo.tooling.targets import select_target
 
 BROWSER_RUNTIME_RESOURCE = "browser_runtime"
 LOGGER = logging.getLogger(__name__)
@@ -85,6 +86,17 @@ class BrowserRuntime:
         self._start_lock: asyncio.Lock | None = None
         self._safe_hosts: dict[tuple[str, int], float] = {}
         self._closed = False
+
+    def resolve_page(self, *, session_key: str, selector: dict[str, Any]) -> str:
+        return self._call(self._resolve_page(session_key, selector))
+
+    async def _resolve_page(self, session_key: str, selector: dict[str, Any]) -> str:
+        inventory = await self._tabs(session_key)
+        page = select_target(
+            inventory["tabs"], selector=selector, kind="browser page",
+            describe=lambda item: {"url": item["url"], "title": item["title"]},
+        )
+        return str(page["page_id"])
 
     def open(
         self,
@@ -670,7 +682,7 @@ class BrowserRuntime:
         safe_url = await self._safe_url(url)
         session = await self._session(session_key)
         if page_id and new_page:
-            raise ValueError("page_id and new_page=true cannot be used together")
+            raise ValueError("page and new_page=true cannot be used together")
         page_created = False
         if page_id:
             page = self._page(session, page_id)

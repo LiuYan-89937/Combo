@@ -14,11 +14,12 @@ def plan_evidence_text(state: Any) -> str:
         return ""
     current_step_id = getattr(plan, "current_step_id", None) or ""
     steps = list(getattr(plan, "steps", []) or [])
+    titles = {step.step_id: step.title for step in steps}
     lines = [
         "Current dynamic plan state:",
         f"- Goal: {getattr(plan, 'goal', '')}",
         f"- Status: {getattr(plan, 'status', '')}",
-        f"- Current step: {current_step_id or 'none'}",
+        f"- Current step: {titles.get(current_step_id, 'none')}",
         (
             "Execution rule: work on the current in_progress step only, use other steps as context, "
             "and call runtime_plan.complete_step with evidence when the current step is satisfied."
@@ -32,7 +33,7 @@ def plan_evidence_text(state: Any) -> str:
         marker = " <= current" if current_step_id and step_id == current_step_id else ""
         lines.append(
             "- "
-            + f"{step_id}: {getattr(step, 'status', '')}{marker}; "
+            + f"{getattr(step, 'status', '')}{marker}; "
             + f"{getattr(step, 'title', '')}; {getattr(step, 'objective', '')}"
         )
         is_current = bool(current_step_id and step_id == current_step_id)
@@ -53,7 +54,7 @@ def plan_evidence_text(state: Any) -> str:
         lines.append(f"- Additional steps omitted from prompt context: {len(steps) - PLAN_EVIDENCE_MAX_STEPS}")
     last_execution = getattr(plan, "last_execution", None)
     if isinstance(last_execution, dict):
-        last_summary = _last_execution_summary(last_execution)
+        last_summary = _last_execution_summary(last_execution, titles)
         if last_summary:
             lines.append(f"- Last execution: {last_summary}")
     return "\n".join(line for line in lines if line.strip())
@@ -134,13 +135,13 @@ def _path_like_value(value: Any) -> str:
     return text
 
 
-def _last_execution_summary(value: dict[str, Any]) -> str:
+def _last_execution_summary(value: dict[str, Any], titles: dict[str, str]) -> str:
     parts: list[str] = []
     step_id = str(value.get("step_id") or "").strip()
     status = str(value.get("status") or "").strip()
     result = str(value.get("result_summary") or "").strip()
     if step_id:
-        parts.append(f"step_id={step_id}")
+        parts.append(f"step={titles.get(step_id, '')}")
     if status:
         parts.append(f"status={status}")
     if result:
@@ -156,5 +157,4 @@ def _truncate_text(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 14)].rstrip() + "...[truncated]"
-
 

@@ -35,7 +35,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         locale=identity.locale,
         timezone_id=identity.timezone,
     )
-    page_id = _optional_text(arguments.get("page_id"))
+    selector = arguments.get("page")
+    page_id = runtime.resolve_page(session_key=session_key, selector=selector) if selector is not None else None
 
     if tool_id == "browser_open":
         output = runtime.open(

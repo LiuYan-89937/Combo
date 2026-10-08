@@ -19,11 +19,12 @@ type contentItem struct {
 }
 
 type toolCallResult struct {
-	Diagnostics []string               `json:"diagnostics,omitempty"`
-	InputResult map[string]string       `json:"input_result,omitempty"`
-	Content     []contentItem           `json:"content"`
-	IsError     bool                    `json:"isError"`
-	Application *toolResultApplication `json:"application,omitempty"`
+	ObservationID string                 `json:"observation_id,omitempty"`
+	Diagnostics   []string               `json:"diagnostics,omitempty"`
+	InputResult   map[string]string      `json:"input_result,omitempty"`
+	Content       []contentItem          `json:"content"`
+	IsError       bool                   `json:"isError"`
+	Application   *toolResultApplication `json:"application,omitempty"`
 }
 
 func textResult(text string, isError bool) toolCallResult {
@@ -100,7 +101,6 @@ func (s *appSnapshot) renderedText() string {
 
 	lines := []string{
 		fmt.Sprintf("App=%s (pid %d)", appRef, s.App.PID),
-        fmt.Sprintf("Observation: %s. Use this observation_id for the next action.", s.ObservationID),
 		fmt.Sprintf("Window: %q, App: %s.", title, s.App.Name),
 	}
     if width, height, err := s.screenshotSize(); err == nil {
@@ -140,7 +140,11 @@ func (s *appSnapshot) result() toolCallResult {
 		Content:     []contentItem{{Type: "text", Text: s.renderedText()}},
 		Application: s.applicationResult(),
 	}
-	if s != nil && s.ScreenshotPNGBase64 != "" {
+	if s == nil {
+		return result
+	}
+	result.ObservationID = s.ObservationID
+	if s.ScreenshotPNGBase64 != "" {
 		result.Content = append(result.Content, contentItem{
 			Type:     "image",
 			Data:     s.ScreenshotPNGBase64,
@@ -245,7 +249,7 @@ func (s *service) callTool(name string, args map[string]any) toolCallResult {
         if definition.Name != name || definition.Annotations["readOnlyHint"] == true { continue }
         snapshot := s.currentSnapshot(requiredString(args, "app"))
         if snapshot == nil || requiredString(args, "observation_id") == "" || snapshot.ObservationID != requiredString(args, "observation_id") {
-            return textResult("[observation.stale] Run get_app_state and use the latest observation_id before acting.", true)
+            return textResult("[observation.stale] Run get_app_state and reassess the target before acting.", true)
         }
         defer s.retireObservation(snapshot.ObservationID)
         if name == "click" || name == "scroll" || name == "drag" || name == "perform_secondary_action" {

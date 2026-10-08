@@ -19,15 +19,19 @@ class DelegationRequest:
 
 @dataclass(frozen=True, slots=True)
 class DelegationContinuationRequest:
-    task_ref: str
+    agent_name: str
     instruction: str
     acceptance_criteria: tuple[str, ...]
+    objective: str | None = None
+    created_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DelegationMessageRequest:
-    task_ref: str
+    agent_name: str
     message: str
+    objective: str | None = None
+    created_at: str | None = None
 
 
 def normalize_isolation(value: Any) -> WorkspaceMode:
@@ -38,4 +42,3 @@ def normalize_isolation(value: Any) -> WorkspaceMode:
     if isolation == "worktree":
         return "worktree"
     raise ValueError("isolation must be shared or worktree")
-

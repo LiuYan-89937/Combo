@@ -1,6 +1,6 @@
 package main
 
-const serverInstructions = "Computer Use tools operate Windows apps through observations and actions. Begin with get_app_state. Every action consumes the latest observation_id, even on failure; use the next returned observation before acting again. Coordinates are screenshot pixels. Prefer the exact observed element; clicks do not substitute other controls. Use scroll for moving through a page, list, conversation, document, or other content. Target an observed scrollable element when available; otherwise provide x/y inside the intended scroll region and the executor sends a window-targeted wheel message without holding a mouse button. Never use drag to imitate ordinary scrolling. Use drag only when the task explicitly requires holding the primary mouse button to move an object, handle, slider, selection, or other draggable control. set_input_target binds either an editable element_index or explicit x/y in the latest screenshot. The local executor uses directed background messages when the native receiver is available. If an inactive application has no confirmed receiver, it automatically obtains a short foreground focus lease, restores the same bound element or position, sends one input transaction through the system keyboard queue, and restores the previous foreground window. The model must not use Raise, repeated clicks, or repeated text to prepare or retry input. set_value requires a native Edit/RichEdit receiver, selects all through its native protocol, and confirms the full range before sending text or Backspace. Other receivers reject replacement before input; type_text is insertion only. Modifier chords remain unsupported. Foreground ownership changes abort delivery. Posted or interrupted input is never permission to replay. Inspect the fresh observation before further external action."
+const serverInstructions = "Computer Use tools operate Windows apps through observations and actions. Begin with get_app_state. The executor binds each action to the observation you have seen. Choose one action, then inspect the returned state before choosing another. An action consumes its observation even on failure; multiple actions in the same response cannot reuse it. Coordinates are screenshot pixels. Prefer the exact observed element; clicks do not substitute other controls. Use scroll for moving through a page, list, conversation, document, or other content. Target an observed scrollable element when available; otherwise provide x/y inside the intended scroll region and the executor sends a window-targeted wheel message without holding a mouse button. Never use drag to imitate ordinary scrolling. Use drag only when the task explicitly requires holding the primary mouse button to move an object, handle, slider, selection, or other draggable control. set_input_target binds either an editable element_index or explicit x/y in the latest screenshot. The local executor uses directed background messages when the native receiver is available. If an inactive application has no confirmed receiver, it automatically obtains a short foreground focus lease, restores the same bound element or position, sends one input transaction through the system keyboard queue, and restores the previous foreground window. The model must not use Raise, repeated clicks, or repeated text to prepare or retry input. set_value requires a native Edit/RichEdit receiver, selects all through its native protocol, and confirms the full range before sending text or Backspace. Other receivers reject replacement before input; type_text is insertion only. Modifier chords remain unsupported. Foreground ownership changes abort delivery. Posted or interrupted input is never permission to replay. Inspect the fresh observation before further external action."
 
 type toolDefinition struct {
 	Name        string         `json:"name"`
@@ -119,14 +119,6 @@ func toolDefinitions() []toolDefinition {
 			}, []string{"app", "text"}),
 		},
 	}
-    for i := range definitions {
-        d := &definitions[i]
-        if d.Annotations["readOnlyHint"] == true { continue }
-        props := d.InputSchema["properties"].(map[string]any)
-        props["observation_id"] = stringProperty("Observation ID from the latest state of this app. Each action refreshes state; never reuse an older ID.")
-        d.InputSchema["required"] = append(d.InputSchema["required"].([]string), "observation_id")
-
-    }
     return definitions
 
 }

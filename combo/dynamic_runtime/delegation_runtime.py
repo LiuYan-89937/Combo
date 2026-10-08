@@ -18,13 +18,14 @@ from combo.agent_worktree import (
 from combo.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
 from combo.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.tooling.builtins.ask_usr.specs import ASK_USR_CAPABILITY_ID
-from combo.dynamic_runtime.delegation_store import DelegationStore
+from combo.dynamic_runtime.delegation_store import DelegatedTaskRecord, DelegationStore
 from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
 from combo.dynamic_runtime.run_control import (
     RuntimeInputInjection,
     RuntimeRunControlRegistry,
 )
+from combo.tooling.targets import select_target
 from combo.runtime_protocol.delegation_requests import (
     DelegationContinuationRequest,
     DelegationMessageRequest,
@@ -100,13 +101,22 @@ class BoundDelegationRuntime:
         self._require_active_parent()
         return self._spawn(request, task_id=uuid4().hex, task_revision=1)
 
+    def _named_task(self, agent_name: str, objective: str | None, created_at: str | None) -> DelegatedTaskRecord:
+        records = self.services.delegations.list_for_session(
+            principal_id=self.parent.request.principal_id,
+            session_id=self.parent.request.session_id, task_id=None,
+        )
+        return select_target(
+            records, selector={"agent_name": agent_name, "objective": objective, "created_at": created_at},
+            kind="child Agent", describe=lambda record: {
+                "agent_name": record.envelope.agent_name, "objective": record.envelope.objective,
+                "created_at": record.envelope.created_at,
+            },
+        )
+
     def continue_task(self, request: DelegationContinuationRequest) -> dict[str, Any]:
         self._require_active_parent()
-        previous = self.services.delegations.latest_for_session(
-            principal_id=self.parent.request.principal_id,
-            session_id=self.parent.request.session_id,
-            task_id=request.task_ref,
-        )
+        previous = self._named_task(request.agent_name, request.objective, request.created_at)
         if previous.status not in {"completed", "failed", "cancelled"}:
             raise RuntimeError("only a terminal delegated task can start a continuation revision")
         envelope = previous.envelope
@@ -131,11 +141,7 @@ class BoundDelegationRuntime:
 
     def message_task(self, request: DelegationMessageRequest) -> dict[str, Any]:
         self._require_active_parent()
-        current = self.services.delegations.latest_for_session(
-            principal_id=self.parent.request.principal_id,
-            session_id=self.parent.request.session_id,
-            task_id=request.task_ref,
-        )
+        current = self._named_task(request.agent_name, request.objective, request.created_at)
         if current.status != "running":
             raise RuntimeError("direct child-agent messages require a running delegated task")
         injection = RuntimeInputInjection(
@@ -151,9 +157,10 @@ class BoundDelegationRuntime:
             raise RuntimeError("delegated task is no longer accepting direct messages")
         return {
             "status": "accepted",
-            "task_ref": current.envelope.task_id,
             "task_revision": current.envelope.task_revision,
             "agent_name": current.envelope.agent_name,
+            "objective": current.envelope.objective,
+            "created_at": current.envelope.created_at,
             "message": request.message,
         }
 
@@ -418,10 +425,10 @@ class BoundDelegationRuntime:
             raise
         return {
             "status": "queued",
-            "task_ref": task_id,
             "task_revision": task_revision,
             "agent_name": request.agent_name,
             "objective": request.objective,
+            "created_at": envelope.created_at,
             "strategy": request.strategy,
             "capabilities": list(request.capability_names),
             "isolation": isolation,
@@ -458,10 +465,10 @@ class BoundDelegationRuntime:
         return {
             "tasks": [
                 {
-                    "task_ref": record.envelope.task_id,
                     "task_revision": record.envelope.task_revision,
                     "agent_name": record.envelope.agent_name,
                     "objective": record.envelope.objective,
+                    "created_at": record.envelope.created_at,
                     "strategy": record.envelope.strategy or record.child_runtime.request.strategy,
                     "status": record.status,
                     **self._isolation_view(

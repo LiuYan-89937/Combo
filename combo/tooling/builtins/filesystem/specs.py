@@ -95,9 +95,9 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
         schema_error_guidance=(
             "必须显式选择写入策略。一次性写入使用 action=write_once，并同时提供 path 和完整 content；"
             "分段写入只接受以下顺序："
-            "action=start 提供 path；action=append 提供真实 write_id 和 content；"
-            "action=commit 或 action=abort 提供真实 write_id。append/commit/abort 不接受 path。"
-            "不要编造或跨 workspace 复用 write_id。"
+            "action=start 提供 path；action=append 提供同一 path 和 content；"
+            "action=commit 或 action=abort 提供同一 path。所有写入操作都通过 path 定位。"
+            "执行器维护分段写入事务；模型不填写事务 ID。"
         ),
         entrypoint="combo.tooling.builtins.filesystem.write:run",
         input_schema={
@@ -139,13 +139,13 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "const": "append",
                             "description": "向同一个 staged write 按顺序追加一个完整语义块；不要拆成随机 token 或零散行。",
                         },
-                        "write_id": {"type": "string", "description": "action=start 返回的 staged write 标识。"},
+                        "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
                         "content": {
                             "type": "string",
                             "description": "本次按顺序追加的一个完整语义块，例如一个章节、组件或代码模块。",
                         },
                     },
-                    "required": ["action", "write_id", "content"],
+                    "required": ["action", "path", "content"],
                     "additionalProperties": False,
                 },
                 {
@@ -155,9 +155,9 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "const": "commit",
                             "description": "所有语义块追加完成后仅提交一次，原子替换目标文件。",
                         },
-                        "write_id": {"type": "string", "description": "需要原子提交的 staged write 标识。"},
+                        "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
                     },
-                    "required": ["action", "write_id"],
+                    "required": ["action", "path"],
                     "additionalProperties": False,
                 },
                 {
@@ -167,9 +167,9 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "const": "abort",
                             "description": "放弃当前 staged write 或无法继续生成时调用，不会修改目标文件。",
                         },
-                        "write_id": {"type": "string", "description": "需要放弃的 staged write 标识。"},
+                        "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
                     },
-                    "required": ["action", "write_id"],
+                    "required": ["action", "path"],
                     "additionalProperties": False,
                 },
             ],

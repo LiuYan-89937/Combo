@@ -47,9 +47,62 @@ class ConversationContextSnapshotStore:
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
 
-    def append(self, snapshot: ConversationContextSnapshot) -> None:
+    def compression_basis(
+        self, session_id: str,
+    ) -> tuple[int | None, ConversationContextSnapshot | None]:
+        """Read the idle conversation boundary and its snapshot in one transaction."""
+        value = _required_text(session_id, "session_id")
+        with self._database.connection(query_only=True) as connection:
+            connection.execute("begin")
+            revision = self._compression_revision(connection, value)
+            snapshot = self._latest_in_connection(connection, value)
+        return revision, snapshot
+
+    def append(
+        self,
+        snapshot: ConversationContextSnapshot,
+        *,
+        expected_snapshot_id: str | None,
+    ) -> None:
+        """Commit manual compression only while its conversation basis is current."""
         with self._database.transaction() as connection:
+            revision = self._compression_revision(connection, snapshot.session_id)
+            latest = connection.execute(
+                """
+                select snapshot_id from conversation_context_snapshots
+                where session_id = ?
+                order by created_at desc, rowid desc
+                limit 1
+                """,
+                (snapshot.session_id,),
+            ).fetchone()
+            snapshot_id = str(latest["snapshot_id"]) if latest is not None else None
+            if revision != snapshot.through_task_revision or snapshot_id != expected_snapshot_id:
+                raise RuntimeError("conversation context changed during compression; compress again")
             self.insert(connection, snapshot)
+
+    @staticmethod
+    def _compression_revision(connection: Any, session_id: str) -> int | None:
+        active = connection.execute(
+            """
+            select 1 from conversation_turns
+            where session_id = ?
+              and status in ('queued', 'running', 'waiting_approval', 'waiting_external')
+            limit 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if active is not None:
+            raise RuntimeError("conversation context cannot be compressed while a turn is active")
+        row = connection.execute(
+            """
+            select max(task_revision) as task_revision from conversation_turns
+            where session_id = ? and status in ('completed', 'failed', 'cancelled')
+            """,
+            (session_id,),
+        ).fetchone()
+        revision = row["task_revision"] if row is not None else None
+        return int(revision) if revision is not None else None
 
     @staticmethod
     def insert(connection: Any, snapshot: ConversationContextSnapshot) -> None:
@@ -84,16 +137,20 @@ class ConversationContextSnapshotStore:
 
     def latest(self, session_id: str) -> ConversationContextSnapshot | None:
         with self._database.connection(query_only=True) as connection:
-            row = connection.execute(
-                """
-                select payload_json
-                from conversation_context_snapshots
-                where session_id = ?
-                order by created_at desc, rowid desc
-                limit 1
-                """,
-                (_required_text(session_id, "session_id"),),
-            ).fetchone()
+            return self._latest_in_connection(connection, _required_text(session_id, "session_id"))
+
+    @staticmethod
+    def _latest_in_connection(connection: Any, session_id: str) -> ConversationContextSnapshot | None:
+        row = connection.execute(
+            """
+            select payload_json
+            from conversation_context_snapshots
+            where session_id = ?
+            order by created_at desc, rowid desc
+            limit 1
+            """,
+            (session_id,),
+        ).fetchone()
         if row is None:
             return None
         return ConversationContextSnapshot.model_validate_json(str(row["payload_json"]))

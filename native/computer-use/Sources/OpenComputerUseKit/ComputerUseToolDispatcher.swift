@@ -153,7 +153,8 @@ public final class ComputerUseToolDispatcher {
             isError: result.isError,
             diagnostics: service.diagnostics,
             inputResult: result.inputResult,
-            application: result.application
+            application: result.application,
+            observationID: result.observationID
         )
     }
 

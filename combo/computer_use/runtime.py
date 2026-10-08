@@ -54,6 +54,12 @@ class ComputerUseResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _AppObservation:
+    observation_id: str
+    text: str
+
+
 class ComputerUseCoordinator:
     """Own the high-speed vision/action loop without entering the ordinary tool loop."""
 
@@ -188,7 +194,7 @@ class ComputerUseCoordinator:
         session = host.start()
         callback = UsageMetadataCallbackHandler()
         calls = steps = 0
-        last_states: dict[str, str] = {}
+        observations: dict[str, _AppObservation] = {}
         try:
             _ensure_not_cancelled(cancelled, host, session)
             catalog = host.tools(session)
@@ -231,6 +237,8 @@ class ComputerUseCoordinator:
                     step=steps,
                 )
                 started = perf_counter()
+                # All actions in this response use only states present in its model input.
+                decision_observations = dict(observations)
                 response = execute_with_runtime_cancellation(
                     lambda: bound.invoke(
                         messages,
@@ -303,7 +311,8 @@ class ComputerUseCoordinator:
                     else:
                         app = str(arguments.get("app") or "")
                         index = arguments.get("element_index")
-                        label = _element_description(last_states.get(app, ""), index)
+                        observed = decision_observations.get(app)
+                        label = _element_description(observed.text if observed else "", index)
                         log_args = {
                             key: value
                             for key, value in arguments.items()
@@ -328,7 +337,18 @@ class ComputerUseCoordinator:
                             operation=_operation_progress(call, steps + 1, "running"),
                         )
                         started = perf_counter()
-                        result = host.call(session, name, arguments)
+                        native_arguments = dict(arguments)
+                        if definitions[name].get("annotations", {}).get("readOnlyHint") is not True:
+                            if observed:
+                                native_arguments["observation_id"] = observed.observation_id
+                                result = host.call(session, name, native_arguments)
+                            else:
+                                result = {
+                                    "isError": True,
+                                    "content": [{"type": "text", "text": "No observation for this app was available in your decision. Inspect the returned state before choosing an action."}],
+                                }
+                        else:
+                            result = host.call(session, name, native_arguments)
                         _ensure_not_cancelled(cancelled, host, session)
                         steps += 1
                         if result.get("input_result"):
@@ -370,8 +390,13 @@ class ComputerUseCoordinator:
                         if result.get("isError") and name not in {"get_app_state", "list_apps"}:
                             result = _observe_after_failed_action(host, session, app, result, cancelled)
                         observation = result.get("latest_observation", result)
-                        if app and not observation.get("isError"):
-                            last_states[app] = _result_text(observation)
+                        if app:
+                            observations.pop(app, None)
+                            if not observation.get("isError") and observation.get("observation_id"):
+                                observations[app] = _AppObservation(
+                                    observation_id=observation["observation_id"],
+                                    text=_result_text(observation),
+                                )
                         _logger.info(
                             "Computer use request=%s step=%s phase=action_result tool=%s is_error=%s elapsed_ms=%.1f",
                             instance.request.request_id,
@@ -502,7 +527,7 @@ def _observe_after_failed_action(
         "latest_observation": observation,
         "content": [
             *result.get("content", []),
-            {"type": "text", "text": "The failed action was NOT replayed. A fresh observation follows. Use its observation_id and reassess the target before choosing the next action."},
+            {"type": "text", "text": "The failed action was NOT replayed. A fresh observation follows. Reassess the target before choosing the next action."},
             *observation.get("content", []),
         ],
     }

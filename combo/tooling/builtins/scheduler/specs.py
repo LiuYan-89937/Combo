@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from combo.tooling.targets import target_schema
 from combo.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -35,7 +36,7 @@ def get_scheduler_tool_specs() -> list[ToolSpec]:
 
 
 def _input_schema() -> dict:
-    job_id = {"type": "string", "minLength": 1, "description": "调度任务列表返回的真实 job_id。"}
+    task = target_schema({"task_content": "Exact task description.", "schedule_expr": "Schedule expression.", "created_at": "Creation time to distinguish otherwise identical tasks."})
     return {
         "oneOf": [
             {
@@ -46,8 +47,8 @@ def _input_schema() -> dict:
             },
             {
                 "type": "object",
-                "properties": {"action": {"const": "describe", "description": "查看一个定时任务的完整配置。"}, "job_id": job_id},
-                "required": ["action", "job_id"],
+                "properties": {"action": {"const": "describe", "description": "查看一个定时任务的完整配置。"}, "task": task},
+                "required": ["action", "task"],
                 "additionalProperties": False,
             },
             {
@@ -69,9 +70,9 @@ def _input_schema() -> dict:
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["pause", "resume", "delete"], "description": "暂停、恢复或删除指定定时任务。"},
-                    "job_id": job_id,
+                    "task": task,
                 },
-                "required": ["action", "job_id"],
+                "required": ["action", "task"],
                 "additionalProperties": False,
             },
         ]

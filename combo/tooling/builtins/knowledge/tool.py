@@ -10,6 +10,7 @@ from combo.tooling.builtins.knowledge.specs import (
     RUNTIME_IDENTITY_RESOURCE,
 )
 from combo.tooling.envelope import tool_envelope
+from combo.tooling.targets import select_target
 
 
 _READ_ACTIONS = frozenset({"list_sources", "search", "list_documents", "read"})
@@ -35,26 +36,33 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     _require_main(identity)
     action = str(arguments.get("action") or "").strip()
     if action == "list_sources":
-        output = {"action": action, "sources": store.sources()}
+        output = {"action": action, "sources": [_public_source(item) for item in store.sources()]}
     elif action == "search":
+        results = store.search(
+            query=_required_text(arguments, "query"),
+            limit=int(arguments["limit"]) if arguments.get("limit") is not None else None,
+        )
+        documents = {item["document_id"]: item for item in store.document_catalog()}
         output = {
             "action": action,
-            "results": store.search(
-                query=_required_text(arguments, "query"),
-                limit=int(arguments["limit"]) if arguments.get("limit") is not None else None,
-            ),
+            "results": [_public_search_result(item, documents[item["document_id"]]) for item in results if item["document_id"] in documents],
         }
     elif action == "list_documents":
-        documents = store.documents(_required_text(arguments, "source_id"))
+        source = _source(store, arguments["source"])
+        documents = store.documents(str(source["source_id"]))
         output = {
             "action": action,
-            "documents": [asdict(item) for item in documents],
+            "documents": [_public_document(item, source["display_name"]) for item in documents],
         }
     elif action == "read":
-        document = store.require_document(_required_text(arguments, "document_id"))
+        target = select_target(
+            store.document_catalog(), selector=arguments["document"], kind="knowledge document",
+            describe=lambda item: {key: item[key] for key in ("title", "source", "created_at")},
+        )
+        document = store.require_document(str(target["document_id"]))
         output = {
             "action": action,
-            "document": asdict(document),
+            "document": _public_document(document, target["source"]),
         }
     elif action == "add_text_source":
         name = _required_text(arguments, "display_name")
@@ -66,14 +74,37 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 "content": _required_text(arguments, "content"),
             }],
         )
-        output = {"action": action, "source": source}
+        output = {"action": action, "source": _public_source(source)}
     elif action == "remove_source":
-        source_id = _required_text(arguments, "source_id")
-        store.delete_source(source_id)
-        output = {"action": action, "source_id": source_id, "removed": True}
+        source = _source(store, arguments["source"])
+        store.delete_source(str(source["source_id"]))
+        output = {"action": action, "source": _source_target(source), "removed": True}
     else:
         raise ValueError(f"unsupported knowledge action: {action}")
     return tool_envelope(output, summary=f"knowledge {action} completed")
+
+
+def _source_target(source: dict[str, Any]) -> dict[str, Any]:
+    return {"name": source["display_name"], "created_at": source["created_at"]}
+
+
+def _source(store: KnowledgeRuntimePort, selector: dict[str, Any]) -> dict[str, Any]:
+    return select_target(store.sources(), selector=selector, describe=_source_target, kind="knowledge source")
+
+
+def _public_source(source: dict[str, Any]) -> dict[str, Any]:
+    return {"name": source["display_name"], **{key: value for key, value in source.items() if key not in {"source_id", "display_name"}}}
+
+
+def _public_document(document: Any, source_name: str) -> dict[str, Any]:
+    return {"source": source_name, **{key: value for key, value in asdict(document).items() if key not in {"source_id", "document_id"}}}
+
+
+def _public_search_result(result: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **{key: value for key, value in result.items() if key not in {"source_id", "document_id", "chunk_id"}},
+        "source": document["source"], "title": document["title"], "created_at": document["created_at"],
+    }
 
 
 def _require_main(identity: Any) -> RuntimeExecutionIdentity:

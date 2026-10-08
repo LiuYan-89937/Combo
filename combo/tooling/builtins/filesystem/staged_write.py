@@ -10,7 +10,6 @@ import stat
 from tempfile import mkdtemp
 from threading import RLock
 from typing import Any
-from uuid import uuid4
 
 from combo.tooling.builtins.filesystem.common import (
     assert_not_protected_write_path,
@@ -38,7 +37,6 @@ class TargetSnapshot:
 
 @dataclass(slots=True)
 class StagedWrite:
-    write_id: str
     workspace_root: Path
     target: Path
     display_path: str
@@ -57,7 +55,7 @@ class StagedWriteStore:
         if ttl_seconds < 60:
             raise ValueError("staged write TTL must be at least 60 seconds")
         self._ttl_seconds = ttl_seconds
-        self._writes: dict[str, StagedWrite] = {}
+        self._writes: dict[tuple[Path, Path], StagedWrite] = {}
         self._lock = RLock()
 
     def create(
@@ -71,10 +69,12 @@ class StagedWriteStore:
     ) -> StagedWrite:
         with self._lock:
             self._discard_expired()
+            key = (root, target)
+            if key in self._writes:
+                raise ValueError("a staged write already exists for this path; commit or abort it first")
             now = datetime.now(UTC)
             staging_root = Path(mkdtemp(prefix="combo-write-"))
             staged = StagedWrite(
-                write_id=uuid4().hex,
                 workspace_root=root,
                 target=target,
                 display_path=display_path,
@@ -86,20 +86,20 @@ class StagedWriteStore:
                 expires_at=(now + timedelta(seconds=self._ttl_seconds)).isoformat(),
             )
             staged.staging_file.touch()
-            self._writes[staged.write_id] = staged
+            self._writes[key] = staged
             return staged
 
-    def get(self, write_id: str) -> StagedWrite:
+    def get(self, root: Path, target: Path) -> StagedWrite:
         with self._lock:
             self._discard_expired()
-            staged = self._writes.get(write_id)
+            staged = self._writes.get((root, target))
             if staged is None:
-                raise ValueError("write_id is unknown or expired; start a new staged write")
+                raise ValueError("no staged write exists for this path; start a new staged write")
             return staged
 
-    def append(self, write_id: str, content: str) -> StagedWrite:
+    def append(self, root: Path, target: Path, content: str) -> StagedWrite:
         with self._lock:
-            staged = self.get(write_id)
+            staged = self.get(root, target)
             content_bytes = content.encode("utf-8")
             with staged.staging_file.open("ab") as handle:
                 handle.write(content_bytes)
@@ -109,28 +109,28 @@ class StagedWriteStore:
             staged.chunk_count += 1
             return staged
 
-    def take(self, write_id: str) -> StagedWrite:
+    def take(self, root: Path, target: Path) -> StagedWrite:
         with self._lock:
-            staged = self.get(write_id)
-            self._writes.pop(write_id, None)
+            staged = self.get(root, target)
+            self._writes.pop((root, target), None)
             return staged
 
-    def abort(self, write_id: str) -> StagedWrite:
+    def abort(self, root: Path, target: Path) -> StagedWrite:
         with self._lock:
-            staged = self.get(write_id)
-            self._writes.pop(write_id, None)
+            staged = self.get(root, target)
+            self._writes.pop((root, target), None)
             _remove_staging(staged)
             return staged
 
     def _discard_expired(self) -> None:
         now = datetime.now(UTC)
         expired = [
-            write_id
-            for write_id, staged in self._writes.items()
+            key
+            for key, staged in self._writes.items()
             if datetime.fromisoformat(staged.expires_at) <= now
         ]
-        for write_id in expired:
-            staged = self._writes.pop(write_id)
+        for key in expired:
+            staged = self._writes.pop(key)
             _remove_staging(staged)
 
     def close(self) -> None:
@@ -162,7 +162,6 @@ def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
     return {
         "action": "start",
         "status": "staging",
-        "write_id": staged.write_id,
         "path": staged.display_path,
         "created_at": staged.created_at,
         "expires_at": staged.expires_at,
@@ -173,17 +172,16 @@ def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
 
 
 def append_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    write_id = _required_text(arguments, "write_id")
+    root, target = _target_path(arguments, resources)
     content = arguments.get("content")
     if not isinstance(content, str):
         raise ValueError("content must be a string")
-    staged = _store(resources).get(write_id)
+    staged = _store(resources).get(root, target)
     _validate_workspace(staged, resources)
-    staged = _store(resources).append(write_id, content)
+    staged = _store(resources).append(root, target, content)
     return {
         "action": "append",
         "status": "staging",
-        "write_id": staged.write_id,
         "path": staged.display_path,
         "bytes_written": staged.bytes_written,
         "chunk_count": staged.chunk_count,
@@ -191,10 +189,10 @@ def append_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
 
 
 def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    write_id = _required_text(arguments, "write_id")
+    root, target = _target_path(arguments, resources)
     store = _store(resources)
-    _validate_workspace(store.get(write_id), resources)
-    staged = store.take(write_id)
+    _validate_workspace(store.get(root, target), resources)
+    staged = store.take(root, target)
     created_directories: list[Path] = []
     try:
         with require_file_locks(resources).acquire((staged.target,)):
@@ -214,7 +212,6 @@ def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
         return {
             "action": "commit",
             "status": "committed",
-            "write_id": staged.write_id,
             "path": staged.display_path,
             "created": not staged.snapshot.exists,
             "bytes_written": after_bytes,
@@ -244,25 +241,34 @@ def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
 
 
 def abort_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    write_id = _required_text(arguments, "write_id")
+    root, target = _target_path(arguments, resources)
     store = _store(resources)
-    staged = store.get(write_id)
+    staged = store.get(root, target)
     _validate_workspace(staged, resources)
-    staged = store.abort(write_id)
+    staged = store.abort(root, target)
     return {
         "action": "abort",
         "status": "aborted",
-        "write_id": staged.write_id,
         "path": staged.display_path,
         "bytes_written": staged.bytes_written,
         "chunk_count": staged.chunk_count,
     }
 
 
+def _target_path(arguments: dict[str, Any], resources: dict[str, Any]) -> tuple[Path, Path]:
+    root, allow_external = filesystem_boundary(resources)
+    target = resolve_path(
+        path=_required_text(arguments, "path"), root=root, allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
+    assert_not_protected_write_path(target, root=root, resources=resources)
+    return root, target
+
+
 def _validate_workspace(staged: StagedWrite, resources: dict[str, Any]) -> None:
     root, allow_external = filesystem_boundary(resources)
     if root != staged.workspace_root:
-        raise ValueError("write_id belongs to a different workspace")
+        raise ValueError("staged write belongs to a different workspace")
     resolved = resolve_path(
         path=staged.display_path,
         root=root,

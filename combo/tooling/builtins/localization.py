@@ -19,8 +19,8 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Read a bounded line range from a UTF-8 text file in the current workspace. offset is the 1-based starting line (default 1), not a byte offset; limit is the maximum number of lines (default 200, maximum 2000). If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.',
     ),
     'write': BuiltinToolLocalization(
-        description_en_us='Create or fully replace a text file in the current workspace. Use write_once with path and complete content; for staged generation use start with path, append with the returned write_id and content, then commit with write_id, or abort to discard it. Only write_once/start accept path; append/commit/abort must not include path. Use edit for local changes.',
-        schema_error_guidance_en_us='Always provide action. write_once requires path and complete content; start requires path; append requires a real write_id and content; commit or abort requires a real write_id. append/commit/abort do not accept path.',
+        description_en_us='Create or fully replace a text file in the current workspace. Use write_once with path and complete content; for staged generation use start, append, then commit with the same file path, or abort to discard it. Every action requires path; the executor binds the staged transaction to the normalized path within this workspace. Only one staged transaction per path may be active. Use edit for local changes.',
+        schema_error_guidance_en_us='Always provide action. write_once requires path and complete content; start requires path; append requires path and content; commit or abort requires path. Use the same target path throughout a staged write.',
     ),
     'edit': BuiltinToolLocalization(
         description_en_us='Apply an exact text replacement to one UTF-8 file in the current workspace. Read that same path first and copy old_text exactly, including whitespace and newlines; do not use text from another file or an older version. A failed match leaves the file unchanged: read it again or locate the text with rg, rather than switching to a full overwrite.',
@@ -34,16 +34,16 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Ask one focused question in the main conversation when a child Agent cannot continue without required information. Use choices for a small mutually exclusive set and allow_free_text for written answers. Do not use this for approvals or routine progress updates.',
     ),
     'shell': BuiltinToolLocalization(
-        description_en_us='Run build, validation, formatting, version-control, script, or service commands in the current workspace. Each invocation starts in this runtime\'s workspace root; omit cwd for that root and do not prefix the command with cd to it. Set cwd to a relative subdirectory when needed. Use rg for file discovery and file-content search, and read for line-based file reading. Use foreground for short commands within the tool timeout. Use background for long renders, builds, or services; it returns process_id immediately and completion is reported automatically. Use shell_status to inspect or wait; do not use sleep polling or detach commands with nohup or &.',
+        description_en_us='Run build, validation, formatting, version-control, script, or service commands in the current workspace. Each invocation starts in this runtime\'s workspace root; omit cwd for that root and do not prefix the command with cd to it. Set cwd to a relative subdirectory when needed. Use rg for file discovery and file-content search, and read for line-based file reading. Use foreground for short commands within the tool timeout. Use background for long renders, builds, or services; it immediately returns the command, working directory, and start time and completion is reported automatically. Use shell_status to inspect or wait; do not use sleep polling or detach commands with nohup or &.',
     ),
     'shell_status': BuiltinToolLocalization(
-        description_en_us='Inspect a background process. wait_seconds waits for completion; after_revision also returns early for new output. Use the last output_revision. Background completion is reported automatically, so repeated polling is unnecessary.',
+        description_en_us='Inspect a background process selected by process.command, process.cwd, and process.started_at. Omit process only when exactly one background process exists. wait_seconds waits for completion; after_revision also returns early for new output. Use the last output_revision. Background completion is reported automatically, so repeated polling is unnecessary.',
     ),
     'shell_stop': BuiltinToolLocalization(
-        description_en_us='Stop a background process tree started by shell and return its final status and output.',
+        description_en_us='Stop a background process tree started by shell and return its final status and output. Select process by command, cwd, and started_at; omit it only when exactly one background process exists.',
     ),
     'tool_output': BuiltinToolLocalization(
-        description_en_us='Retrieve complete tool output retained outside the model context. Read directly when a real output_id is available; otherwise list available outputs first. Never invent an output_id.',
+        description_en_us='Retrieve complete tool output retained outside the model context. Select output by tool name, original arguments, and creation time. List outputs if the target is unknown; omit output only when exactly one retained result exists.',
     ),
     'capability': BuiltinToolLocalization(
         description_en_us="Discover Tool, MCP Server, and Skill capabilities on demand. Search the top-level catalog first, then a selected MCP server's directory. Results are candidates only; describe each exact target before first use and follow its returned definition.",
@@ -55,10 +55,10 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us="Start one bounded child-Agent task without blocking. The child inherits the main Agent's currently enabled capabilities and stable built-in tools, excluding main-only controls. Optional capability names must already be enabled; an empty array still inherits the enabled set. Provide a role name, strategy, objective, and acceptance criteria. Acceptance is not completion; do not poll immediately.",
     ),
     'delegate_continue': BuiltinToolLocalization(
-        description_en_us='Continue a terminal child-Agent task. Reuse its checkpoint, role, and model while refreshing capabilities from the currently enabled main Agent profile. Start a new task revision for an improvement, correction, or follow-up.',
+        description_en_us='Continue a terminal child-Agent task by its exact agent_name. Add its current objective if names repeat. Reuse its checkpoint, role, and model while refreshing capabilities from the currently enabled main Agent profile. Start a new task revision for an improvement, correction, or follow-up.',
     ),
     'delegate_message': BuiltinToolLocalization(
-        description_en_us='Insert a user message directly into a running child Agent. It is consumed at the next safe execution boundary without cancelling the current tool or using main-conversation steering.',
+        description_en_us='Insert a user message directly into a running child Agent selected by agent_name and, if names repeat, its current objective. It is consumed at the next safe execution boundary without cancelling the current tool or using main-conversation steering.',
     ),
     'delegation_status': BuiltinToolLocalization(
         description_en_us='Inspect authoritative status for all child-Agent tasks in the current conversation. Use only for an explicit progress request or to retrieve delivery details after a terminal notification; do not poll.',
@@ -70,10 +70,10 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us="Read a confirmed MCP Resource or expand an MCP Prompt with its declared arguments. Search and describe the exact object first; another object's definition is not interchangeable.",
     ),
     'knowledge': BuiltinToolLocalization(
-        description_en_us='Search, inspect, add, and remove shared knowledge sources. Search before answering from internal documents. Available only to the main Agent.',
+        description_en_us='Search, inspect, add, and remove shared knowledge sources. Search before answering from internal documents. Select a source by its name and creation time, or a document by title, source name, and creation time. Combine fields when names repeat. Available only to the main Agent.',
     ),
     'scheduler': BuiltinToolLocalization(
-        description_en_us="Create and manage scheduled tasks bound to the main Agent's current workspace. Available only to the main Agent.",
+        description_en_us="Create and manage scheduled tasks bound to the main Agent's current workspace. Select an existing task by its exact task_content, schedule_expr, and creation time; list tasks first if needed. Available only to the main Agent.",
     ),
     'skillhub': BuiltinToolLocalization(
         description_en_us='Search, install, or remove Skills through SkillHub and synchronize them into the unified Skill pool. Available only to the main Agent.',
@@ -88,7 +88,7 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us=SKILL_TOOL_DESCRIPTION,
     ),
     'browser_open': BuiltinToolLocalization(
-        description_en_us='Open an HTTP or HTTPS URL in the isolated browser. Reuse the active page by default; create a new tab only when simultaneous pages are intentional. Returns page state and a page_id for later operations. When page_state is verification_required or authentication_required, immediately stop all browser operations, tell the user in the main conversation to take control and complete the step manually, then end the current response and wait for confirmation. Do not retry or call other browser tools before confirmation. After confirmation, call browser_snapshot once before continuing. Neither state proves that the website is unavailable.',
+        description_en_us='Open an HTTP or HTTPS URL in the isolated browser. Reuse the active page by default; create a new tab only when simultaneous pages are intentional. Returns page state. Later operations use the current page by default; select another page by its exact URL and title. When page_state is verification_required or authentication_required, immediately stop all browser operations, tell the user in the main conversation to take control and complete the step manually, then end the current response and wait for confirmation. Do not retry or call other browser tools before confirmation. After confirmation, call browser_snapshot once before continuing. Neither state proves that the website is unavailable.',
     ),
     'browser_snapshot': BuiltinToolLocalization(
         description_en_us='Read the current page state, structured text, and optional links. Use this when page state is uncertain and once after the user confirms manual sign-in or human verification is complete. If verification_required or authentication_required remains, stop browser operations, notify the user in the main conversation, end the current response, and wait. Do not repeatedly retry browser tools. A blocked verification flow does not prove that the website is unavailable.',

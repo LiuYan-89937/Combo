@@ -60,13 +60,14 @@ class RuntimeModelResolver:
             raise RuntimeError("resolved model does not match the runtime policy snapshot")
         return resolved
 
-    def resolve_compression_for_instance(
+    def resolve_compression_for_policy(
         self,
-        instance: RuntimeInstance,
+        policy: RuntimePolicySnapshot,
         *,
+        session_id: str,
         fallback: ResolvedRuntimeChatModel,
     ) -> ResolvedRuntimeChatModel:
-        frozen = instance.request.policy_snapshot.compression_model
+        frozen = policy.compression_model
         if frozen is None:
             return fallback
         resolved = self.resolve_chat_model(
@@ -74,7 +75,7 @@ class RuntimeModelResolver:
             profile_id=frozen.profile_id,
             expected_profile_revision=frozen.profile_revision,
             expected_credential_revision=frozen.credential_revision,
-            session_id=instance.request.session_id,
+            session_id=session_id,
         )
         if resolved.snapshot != frozen:
             raise RuntimeError("resolved compression model does not match the runtime policy snapshot")

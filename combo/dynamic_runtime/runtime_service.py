@@ -243,8 +243,9 @@ class DynamicRuntimeService:
             canonical_messages, current_user_message = self._runtime_input(claimed_instance)
             graph = self._service_set.graph_for(claimed_instance.request.strategy)
             resolved_model = self._model_resolver.resolve_for_instance(claimed_instance)
-            compression_model = self._model_resolver.resolve_compression_for_instance(
-                claimed_instance,
+            compression_model = self._model_resolver.resolve_compression_for_policy(
+                claimed_instance.request.policy_snapshot,
+                session_id=claimed_instance.request.session_id,
                 fallback=resolved_model,
             )
             register_runtime_model_handle(

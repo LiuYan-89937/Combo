@@ -47,7 +47,9 @@ def continue_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[
         raise RuntimeError("delegate continuation requires a bound delegation runtime")
     result = runtime.continue_task(
         DelegationContinuationRequest(
-            task_ref=_required_text(arguments.get("task_ref"), "task_ref"),
+            agent_name=_required_text(arguments.get("agent_name"), "agent_name"),
+            objective=arguments.get("objective"),
+            created_at=arguments.get("created_at"),
             instruction=_required_text(arguments.get("instruction"), "instruction"),
             acceptance_criteria=_text_tuple(arguments.get("acceptance_criteria")),
         )
@@ -61,7 +63,9 @@ def message_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[s
         raise RuntimeError("delegate messaging requires a bound delegation runtime")
     result = runtime.message_task(
         DelegationMessageRequest(
-            task_ref=_required_text(arguments.get("task_ref"), "task_ref"),
+            agent_name=_required_text(arguments.get("agent_name"), "agent_name"),
+            objective=arguments.get("objective"),
+            created_at=arguments.get("created_at"),
             message=_required_text(arguments.get("message"), "message"),
         )
     )

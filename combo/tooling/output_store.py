@@ -9,8 +9,9 @@ from typing import Any
 from uuid import uuid4
 
 from combo.tooling.output_compressor import compress_tool_output
-from combo.tooling.envelope import tool_envelope, tool_failure
+from combo.tooling.envelope import tool_envelope
 from combo.tooling.execution_context import current_tool_output_session_id
+from combo.tooling.targets import select_target
 from combo.tooling.spec import ToolOutputCompressionActionConfig, ToolOutputCompressionConfig
 
 
@@ -56,6 +57,7 @@ class ToolOutputStore:
         tool_id: str,
         tool_call_id: str | None,
         output: dict[str, Any],
+        arguments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         output_id = f"toolout_{uuid4().hex}"
         text = _json_text(output)
@@ -64,6 +66,7 @@ class ToolOutputStore:
             "type": "tool_output_record",
             "id": output_id,
             "tool_id": tool_id,
+            "arguments": dict(arguments or {}),
             "tool_call_id": tool_call_id or "",
             "created_at": created_at,
             "size_chars": len(text),
@@ -77,6 +80,7 @@ class ToolOutputStore:
             "type": "tool_output_ref",
             "id": output_id,
             "tool_id": tool_id,
+            "arguments": dict(arguments or {}),
             "tool_call_id": tool_call_id or "",
             "created_at": created_at,
             "size_chars": len(text),
@@ -88,12 +92,13 @@ class ToolOutputStore:
             "type": "tool_output_ref",
             "id": record["id"],
             "tool_id": record["tool_id"],
+            "arguments": dict(record.get("arguments") or {}),
             "tool_call_id": record.get("tool_call_id", ""),
             "created_at": record["created_at"],
             "size_chars": record["size_chars"],
         }
 
-    def list_outputs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+    def list_outputs(self, *, limit: int | None = 20) -> list[dict[str, Any]]:
         refs: list[dict[str, Any]] = []
         for path in self.records_dir.glob("toolout_*.json"):
             try:
@@ -107,13 +112,18 @@ class ToolOutputStore:
                     "type": "tool_output_ref",
                     "id": str(record.get("id") or ""),
                     "tool_id": str(record.get("tool_id") or ""),
+                    "arguments": dict(record.get("arguments") or {}),
                     "tool_call_id": str(record.get("tool_call_id") or ""),
                     "created_at": str(record.get("created_at") or ""),
                     "size_chars": int(record.get("size_chars") or 0),
                 }
             )
         refs.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-        return refs[: max(limit, 0)]
+        return refs if limit is None else refs[: max(limit, 0)]
+
+    def resolve_target(self, selector: dict[str, Any]) -> str:
+        target = select_target(self.list_outputs(limit=None), selector=selector, describe=_output_target, kind="tool output")
+        return str(target["id"])
 
     def read(
         self,
@@ -174,7 +184,7 @@ def project_tool_output(
     if len(raw_text) <= effective_max_chars:
         return ToolOutputProjection(output=output)
     output_ref = (
-        store.write_output(tool_id=tool_id, tool_call_id=tool_call_id, output=output)
+        store.write_output(tool_id=tool_id, tool_call_id=tool_call_id, output=output, arguments=arguments)
         if store is not None
         else None
     )
@@ -187,22 +197,22 @@ def project_tool_output(
         model=compression_model,
         config=_compression_config_for_arguments(compression_config, arguments or {}),
     )
-    output_id = str(output_ref.get("id") or "") if output_ref else ""
+    target = _output_target(output_ref) if output_ref else None
     compacted: dict[str, Any] = {
         "compressed_output": compression.compressed_output,
-        "output_id": output_id,
-        "raw_output_read_hint": _raw_output_read_hint(output_id=output_id),
+        "source": target,
+        "raw_output_read_hint": _raw_output_read_hint(target),
         "_tool_output_compacted": {
             "original_chars": compression.original_chars,
             "compressed_chars": compression.compressed_chars,
             "model_visible_limit_chars": effective_max_chars,
             "compression_method": compression.method,
-            "output_ref": output_ref,
+            "source": target,
         },
     }
     summary = "Tool output exceeded the model-visible limit; a compressed observation was returned."
     if output_ref is not None:
-        summary += f" Full output can be read with tool_output using output_id={output_id}."
+        summary += " Read the full output with tool_output using its source business fields."
     return ToolOutputProjection(
         output=compacted,
         output_ref=output_ref,
@@ -226,14 +236,14 @@ def _compression_config_for_arguments(
     return None
 
 
-def _raw_output_read_hint(*, output_id: str) -> str:
-    if not output_id:
-        return "The full raw tool output is not available because no tool_output store is configured."
-    return (
-        "If the compressed observation lacks enough detail, call "
-        f"tool_output(action='read', output_id='{output_id}') to inspect the original tool output. "
-        "Use the exact output_id; do not infer or rewrite it."
-    )
+def _output_target(ref: dict[str, Any]) -> dict[str, Any]:
+    return {"tool": ref["tool_id"], "arguments": dict(ref.get("arguments") or {}), "created_at": ref["created_at"]}
+
+
+def _raw_output_read_hint(target: dict[str, Any] | None) -> str:
+    if target is None:
+        return ""
+    return "Read the retained result with tool_output action=read and output=" + _json_text(target)
 
 
 def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -241,125 +251,28 @@ def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dic
     if not isinstance(store, ToolOutputStore):
         raise ValueError("tool_output_store resource is not configured")
     action = str(arguments.get("action") or "").strip()
-    output_id = str(arguments.get("output_id") or "").strip()
     if action == "list":
-        limit = _optional_int(arguments.get("limit"), default=20)
         return tool_envelope({
-            "action": action,
-            "status": "completed",
-            "message": "Available tool outputs for this workspace.",
-            "outputs": store.list_outputs(limit=limit),
+            "action": action, "outputs": [
+                {**_output_target(ref), "size_chars": ref["size_chars"]}
+                for ref in store.list_outputs()
+            ],
         })
+    output_id = store.resolve_target(dict(arguments.get("output") or {}))
     if action == "describe":
-        try:
-            output = store.describe(output_id)
-        except (FileNotFoundError, ValueError):
-            failure = _output_ref_not_found(action=action, output_id=output_id, store=store)
-            return tool_failure(failure["message"], output=failure, retryable=True)
-        return tool_envelope({"action": action, "status": "completed", "output": output})
-    if action == "read":
-        try:
-            output = store.read(
-                output_id=output_id,
-                path=_optional_string(arguments.get("path")),
-                offset=_optional_int(arguments.get("offset"), default=0),
-                limit=_optional_int(arguments.get("limit"), default=DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS),
-            )
-        except (FileNotFoundError, ValueError):
-            failure = _output_ref_not_found(action=action, output_id=output_id, store=store)
-            return tool_failure(failure["message"], output=failure, retryable=True)
-        return tool_envelope({"action": action, "status": "completed", "output": output})
-    raise ValueError(f"unsupported tool_output action: {action}")
-
-
-def _output_ref_not_found(*, action: str, output_id: str, store: ToolOutputStore) -> dict[str, Any]:
-    return {
-        "action": action,
-        "status": "output_ref_not_found",
-        "message": (
-            "The requested output_id is not a readable output for this workspace. "
-            "Do not invent output_id values. Call tool_output with action=list and use one of the returned ids."
-        ),
-        "requested_id": output_id,
-        "available_outputs": store.list_outputs(limit=20),
-        "suggested_action": "Call tool_output list, then retry with an id from available_outputs.",
-    }
-
-
-def _fit_projection(
-    value: dict[str, Any],
-    *,
-    raw_text: str,
-    output_ref: dict[str, Any] | None,
-    max_chars: int,
-) -> dict[str, Any]:
-    if len(_json_text(value)) <= max_chars:
-        return value
-    preview_budget = max(200, max_chars - 900)
-    return {
-        "_tool_output_compacted": {
-            "original_chars": len(raw_text),
-            "model_visible_limit_chars": max_chars,
-            "output_ref": output_ref,
-        },
-        "preview": _text_preview(raw_text, preview_budget),
-    }
-
-
-def _compact_value(value: Any, *, budget: int) -> Any:
-    if isinstance(value, dict):
-        return _compact_dict(value, budget=budget)
-    if isinstance(value, list):
-        return _compact_list(value, budget=budget)
-    if isinstance(value, str):
-        return value if len(value) <= budget else _text_preview(value, budget)
-    return value
-
-
-def _compact_dict(value: dict[str, Any], *, budget: int) -> dict[str, Any]:
-    per_field_budget = max(300, budget // max(len(value), 1))
-    result: dict[str, Any] = {}
-    for key, item in value.items():
-        result[key] = _compact_value(item, budget=per_field_budget)
-    return result
-
-
-def _compact_list(value: list[Any], *, budget: int) -> dict[str, Any] | list[Any]:
-    if not value:
-        return []
-    item_budget = max(200, budget // min(len(value), 10))
-    retained: list[Any] = []
-    retained_chars = 2
-    for item in value:
-        compact_item = _compact_value(item, budget=item_budget)
-        projected = _json_text(compact_item)
-        if retained and retained_chars + len(projected) > budget:
-            break
-        retained.append(compact_item)
-        retained_chars += len(projected) + 1
-    if len(retained) == len(value):
-        return retained
-    return {
-        "_type": "list_preview",
-        "items": retained,
-        "original_length": len(value),
-        "retained_length": len(retained),
-        "truncated": True,
-    }
-
-
-def _text_preview(value: str, budget: int) -> dict[str, Any]:
-    safe_budget = max(budget, 100)
-    if len(value) <= safe_budget:
-        return {"_type": "text_preview", "text": value, "truncated": False, "original_chars": len(value)}
-    half = max(50, (safe_budget - 80) // 2)
-    return {
-        "_type": "text_preview",
-        "head": value[:half],
-        "tail": value[-half:],
-        "truncated": True,
-        "original_chars": len(value),
-    }
+        ref = store.describe(output_id)
+        output = {**_output_target(ref), "size_chars": ref["size_chars"]}
+    elif action == "read":
+        output = store.read(
+            output_id=output_id, path=_optional_string(arguments.get("path")),
+            offset=_optional_int(arguments.get("offset"), default=0),
+            limit=_optional_int(arguments.get("limit"), default=DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS),
+        )
+        output.pop("output_id")
+        output["source"] = _output_target(store.describe(output_id))
+    else:
+        raise ValueError(f"unsupported tool_output action: {action}")
+    return tool_envelope({"action": action, "output": output})
 
 
 def _select_path(value: Any, path: str | None) -> Any:

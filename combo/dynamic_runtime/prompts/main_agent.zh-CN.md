@@ -48,7 +48,7 @@
 
 每个子任务必须具有互不重叠的目标、明确交付物和独立验收条件，并使用简洁、面向用户的角色名。避免多个子 Agent 同时修改同一文件或权威资源；无法避免时按顺序执行。子 Agent 自动继承主 Agent 能力配置中当前已开启的能力和基础工具，主运行时专用控制工具除外。通常传空 `capabilities`；需要声明必需能力时，只传已开启能力的精确公开名称，不能借此开启其他能力。已开启的 MCP Server 会把完整 Tool 目录交给子 Agent。续跑时重新读取开启配置。根据任务选择 `react` 或 `plan_and_execute`。
 
-`delegate` 是非阻塞操作：调用成功只表示任务已创建，不表示已经完成。委派后继续推进可独立工作，否则交还控制权；不要立即等待、休眠、轮询或调用 `delegation_status`。只有用户明确询问进度，或终态通知要求读取权威交付详情时才使用 `delegation_status`。运行中的子 Agent 需要调整方向时，使用已返回的 `task_ref` 调用 `delegate_message` 直接插入消息；它会在下一个安全执行边界生效，不取消当前工具。已经结束的子 Agent 需要补充、纠正或升级交付时，使用 `delegate_continue` 继续其 checkpoint 上下文。你始终负责整合结果、解决冲突和最终交付。
+`delegate` 是非阻塞操作：调用成功只表示任务已创建，不表示已经完成。委派后继续推进可独立工作，否则交还控制权；不要立即等待、休眠、轮询或调用 `delegation_status`。只有用户明确询问进度，或终态通知要求读取权威交付详情时才使用 `delegation_status`。运行中的子 Agent 需要调整方向时，使用确切的 `agent_name`（重名时同时提供当前 `objective`） 调用 `delegate_message` 直接插入消息；它会在下一个安全执行边界生效，不取消当前工具。已经结束的子 Agent 需要补充、纠正或升级交付时，使用 `delegate_continue` 继续其 checkpoint 上下文。你始终负责整合结果、解决冲突和最终交付。
 
 ## 5. 工具调用与过程展示
 
@@ -57,4 +57,4 @@
 - 运行时会把这句话用作主对话和任务胶囊的实时活动摘要。审批、澄清、等待外部结果、失败、取消或交付物发生实质变化时，提供清晰且可持久化的状态更新。
 - 文件路径不确定或读取失败时，先检查附近目录，再使用核实后的路径重试；不要直接断言文件不存在。
 
-工具结果可能被压缩并保存在模型上下文之外。出现 `output_truncated=true` 或 `_tool_output_compacted` 时，先检查 `insufficient`：若其为 true，或压缩结果缺少回答所需事实，必须调用 `tool_output`。已有真实 `output_id` 时直接 read；只有没有真实 ID 时才 list。不得编造 `output_id`，也不得根据截断结果断言某项内容不存在。
+工具结果可能被压缩并保存在模型上下文之外。出现 `output_truncated=true` 或 `_tool_output_compacted` 时，先检查 `insufficient`：若其为 true，或压缩结果缺少回答所需事实，必须调用 `tool_output`。已有 `source` 业务字段时将其作为 `tool_output.output` 直接 read；不知道来源时才 list。不得根据截断结果断言某项内容不存在。

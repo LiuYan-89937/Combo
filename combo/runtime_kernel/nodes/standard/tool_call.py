@@ -17,6 +17,7 @@ from combo.runtime_kernel.plan_execute_tools import (
 from combo.runtime_kernel.planning import (
     RUNTIME_PLAN_TOOL_ID,
     execute_runtime_plan_action,
+    plan_model_payload,
 )
 from combo.runtime_kernel.state import RuntimeState
 from combo.tooling.langgraph_node import (
@@ -261,7 +262,7 @@ def _execute_runtime_plan_calls(
                 message=result.message,
                 arguments=arguments,
                 retryable=result.status != "completed",
-                output={"plan": result.plan.model_dump(mode="json")},
+                output={"plan": plan_model_payload(result.plan), "candidates": result.candidates},
                 evidence={"runtime_state_section": "plan"},
                 execution_status="completed" if result.status == "completed" else "failed",
                 contract_status="valid",

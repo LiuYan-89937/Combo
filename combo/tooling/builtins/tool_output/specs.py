@@ -8,11 +8,7 @@ def get_tool_output_tool_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
             id="tool_output",
-            description=(
-                "查看保存在模型上下文之外的完整工具输出。"
-                "除非当前提示明确给出真实 output_id，否则先使用 action=list。"
-                "不要编造 output_id；describe/read 只接受 list 返回或 output_ref 中展示的 ID。"
-            ),
+            description="按工具名称、原始参数和创建时间读取保存在模型上下文之外的完整工具输出。来源未知时先 list；只有唯一保留结果时才可省略 output。",
             entrypoint="combo.tooling.output_store:run_tool_output",
             input_schema=_input_schema(),
             output_schema={"type": "object"},
@@ -34,9 +30,13 @@ def _input_schema() -> dict:
         "additionalProperties": False,
         "properties": {
             "action": {"type": "string", "enum": ["list", "describe", "read"], "description": "list 列出输出，describe 查看结构，read 分段读取内容。"},
-            "output_id": {
-                "type": "string",
-                "description": "A real output_id returned by action=list or shown in a compacted tool observation output_ref.",
+            "output": {
+                "type": "object", "minProperties": 1, "additionalProperties": False,
+                "properties": {
+                    "tool": {"type": "string", "minLength": 1},
+                    "arguments": {"type": "object", "description": "Original business arguments of the tool invocation."},
+                    "created_at": {"type": "string", "minLength": 1, "description": "Creation time distinguishes repeated invocations."},
+                },
             },
             "path": {
                 "type": "string",
@@ -47,7 +47,7 @@ def _input_schema() -> dict:
         },
         "oneOf": [
             {"properties": {"action": {"const": "list", "description": "列出当前会话可读取的完整工具输出。"}}, "required": ["action"]},
-            {"properties": {"action": {"const": "describe", "description": "查看指定输出的结构与大小。"}}, "required": ["action", "output_id"]},
-            {"properties": {"action": {"const": "read", "description": "按路径和偏移分段读取指定输出。"}}, "required": ["action", "output_id"]},
+            {"properties": {"action": {"const": "describe", "description": "查看指定输出的结构与大小。"}}, "required": ["action"]},
+            {"properties": {"action": {"const": "read", "description": "按路径和偏移分段读取指定输出。"}}, "required": ["action"]},
         ],
     }

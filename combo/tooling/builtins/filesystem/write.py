@@ -41,14 +41,14 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
             action="allow",
             risk_level="low",
             reasons=[f"{action} only changes or removes an uncommitted staged write"],
-            facts={"write_id": str(arguments.get("write_id") or "")},
+            facts={"path": str(arguments.get("path") or "")},
         ).model_dump(mode="json")
     if action == "commit":
         return ToolRiskResult(
             action="ask",
             risk_level="medium",
             reasons=["committing a staged write atomically replaces the target workspace file"],
-            facts={"write_id": str(arguments.get("write_id") or "")},
+            facts={"path": str(arguments.get("path") or "")},
         ).model_dump(mode="json")
     return ToolRiskResult.model_validate(
         path_risk_result(arguments, context, default_action="ask", sensitive_action="ask")

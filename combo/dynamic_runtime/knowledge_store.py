@@ -100,6 +100,19 @@ class GlobalKnowledgeStore:
             ).fetchall()
         return [self._document(row) for row in rows]
 
+    def document_catalog(self) -> list[dict[str, Any]]:
+        with self._database.connection(query_only=True) as connection:
+            rows = connection.execute(
+                """
+                select document.document_id, document.title, document.created_at,
+                       json_extract(source.payload_json, '$.display_name') as source
+                from knowledge_documents as document
+                join knowledge_sources as source on source.source_id = document.source_id
+                where document.status = 'ready' and source.status != 'deleted'
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def search(
         self,
         *,

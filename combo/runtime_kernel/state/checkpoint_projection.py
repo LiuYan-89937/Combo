@@ -62,7 +62,7 @@ def _checkpoint_tool_observation(observation: dict[str, Any]) -> dict[str, Any]:
     output_ref = _output_ref_from_observation(observation)
     if output_ref is not None:
         compacted["output_ref"] = output_ref
-    compact_output = _checkpoint_tool_output(observation.get("output"), output_ref=output_ref)
+    compact_output = _checkpoint_tool_output(observation.get("output"))
     if compact_output:
         compacted["output"] = compact_output
     return compacted
@@ -82,15 +82,13 @@ def _output_ref_from_observation(observation: dict[str, Any]) -> dict[str, Any] 
     return nested_ref if isinstance(nested_ref, dict) else None
 
 
-def _checkpoint_tool_output(output: Any, *, output_ref: dict[str, Any] | None) -> dict[str, Any]:
+def _checkpoint_tool_output(output: Any) -> dict[str, Any]:
     if not isinstance(output, dict):
         return {}
     compacted: dict[str, Any] = {}
-    output_id = str(output.get("output_id") or "")
-    if not output_id and isinstance(output_ref, dict):
-        output_id = str(output_ref.get("id") or "")
-    if output_id:
-        compacted["output_id"] = output_id
+    source = output.get("source")
+    if isinstance(source, dict):
+        compacted["source"] = source
     read_hint = str(output.get("raw_output_read_hint") or "")
     if read_hint:
         compacted["raw_output_read_hint"] = read_hint

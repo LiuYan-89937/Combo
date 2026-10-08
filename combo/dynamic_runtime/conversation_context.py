@@ -51,39 +51,29 @@ class ConversationContextService:
         identity = self._conversations.require_identity(session_id)
         if identity.principal_id != principal_id:
             raise PermissionError("conversation principal does not own the context snapshot")
-        through_task_revision = self._conversations.compactable_task_revision(session_id)
+        through_task_revision, latest_snapshot = self._context_snapshots.compression_basis(session_id)
         if through_task_revision is None:
-            return {"status": "skipped", "reason": "no_completed_turns"}
+            return {"status": "skipped", "reason": "no_terminal_turns"}
 
-        latest_runtime = self._runtime_instances.latest_completed_main(
-            session_id=session_id,
-            principal_id=principal_id,
+        current_policy = self._runtime_policies.require_for_principal(principal_id)
+        resolved_policy = self._model_resolver.resolve_policy(
+            current_policy, operation="main_turn", session_id=session_id,
         )
-        if latest_runtime is None:
-            return {"status": "skipped", "reason": "no_completed_runtime"}
-        model_role = latest_runtime.request.policy_snapshot.model.operation
+        policy_snapshot = resolved_policy.snapshot
+        model_role = policy_snapshot.model.operation
+        compression_detail = policy_snapshot.context_compression_detail
+        keep_recent_messages = policy_snapshot.context_compression_keep_recent_messages
+        expected_snapshot_id = latest_snapshot.snapshot_id if latest_snapshot is not None else None
 
-        try:
-            current_policy = self._runtime_policies.require_for_principal(principal_id)
-            compression_detail = current_policy.context_compression_detail
-            keep_recent_messages = current_policy.context_compression_keep_recent_messages
-        except LookupError:
-            compression_detail = latest_runtime.request.policy_snapshot.context_compression_detail
-            keep_recent_messages = (
-                latest_runtime.request.policy_snapshot.context_compression_keep_recent_messages
-            )
-
-        graph_messages = self.session_messages(
+        graph_messages = self._messages_from_snapshot(
+            snapshot=latest_snapshot,
             session_id=session_id,
             through_task_revision=through_task_revision,
         )
         if incomplete_tool_call_ids(graph_messages):
             raise RuntimeError("conversation context contains incomplete tool call history")
 
-        limits = self._model_resolver.context_limits_for_snapshot(
-            latest_runtime.request.policy_snapshot.model
-        )
-        latest_snapshot = self._context_snapshots.latest(session_id)
+        limits = self._model_resolver.context_limits_for_snapshot(policy_snapshot.model)
         if (
             latest_snapshot is not None
             and latest_snapshot.through_task_revision == through_task_revision
@@ -115,7 +105,9 @@ class ConversationContextService:
                         "token_estimate_after": message_tokens,
                     },
                 )
-                self._context_snapshots.append(corrected_snapshot)
+                self._context_snapshots.append(
+                    corrected_snapshot, expected_snapshot_id=expected_snapshot_id,
+                )
                 snapshot_updated_at = corrected_snapshot.created_at
             return {
                 "status": "skipped",
@@ -138,10 +130,10 @@ class ConversationContextService:
             }
         )
 
-        main_model = self._model_resolver.resolve_for_instance(latest_runtime)
-        compression_model = self._model_resolver.resolve_compression_for_instance(
-            latest_runtime,
-            fallback=main_model,
+        compression_model = self._model_resolver.resolve_compression_for_policy(
+            policy_snapshot,
+            session_id=session_id,
+            fallback=resolved_policy.chat_model,
         )
         compressed_messages, report = maybe_compress_messages(
             messages=graph_messages,
@@ -172,7 +164,7 @@ class ConversationContextService:
             context_window=window,
             compression_report=report_payload,
         )
-        self._context_snapshots.append(snapshot)
+        self._context_snapshots.append(snapshot, expected_snapshot_id=expected_snapshot_id)
         return {
             **report_payload,
             "snapshot_id": snapshot.snapshot_id,
@@ -207,7 +199,21 @@ class ConversationContextService:
     ) -> list[BaseMessage]:
         if runtime_role != "main":
             return conversation_to_graph_messages(list(canonical_messages or []))
-        snapshot = self._context_snapshots.latest(session_id)
+        return self._messages_from_snapshot(
+            snapshot=self._context_snapshots.latest(session_id),
+            session_id=session_id,
+            through_task_revision=through_task_revision,
+            canonical_messages=canonical_messages,
+        )
+
+    def _messages_from_snapshot(
+        self,
+        *,
+        snapshot: ConversationContextSnapshot | None,
+        session_id: str,
+        through_task_revision: int,
+        canonical_messages: list[ConversationMessage] | None = None,
+    ) -> list[BaseMessage]:
         if snapshot is None or snapshot.through_task_revision > through_task_revision:
             source_messages = canonical_messages
             if source_messages is None:
@@ -269,4 +275,3 @@ def _manual_compression_context_window(
     )
     window["current_message_token_estimate"] = message_tokens
     return window
-

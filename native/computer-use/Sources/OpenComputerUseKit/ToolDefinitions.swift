@@ -10,14 +10,7 @@ public struct ToolDefinition: @unchecked Sendable {
         self.name = name
         self.description = description
         self.annotations = annotations
-        var schema = inputSchema
-        if annotations["readOnlyHint"] as? Bool != true {
-            var properties = schema["properties"] as? [String: Any] ?? [:]
-            properties["observation_id"] = stringProperty(description: "Observation ID from the latest state for this app. Each action refreshes state; never reuse an older ID.")
-            schema["properties"] = properties
-            schema["required"] = (schema["required"] as? [String] ?? []) + ["observation_id"]
-        }
-        self.inputSchema = schema
+        self.inputSchema = inputSchema
     }
 
     public var asDictionary: [String: Any] {

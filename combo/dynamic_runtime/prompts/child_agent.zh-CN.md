@@ -20,4 +20,4 @@
 - 使用模型原生的 tool call 机制调用工具，并严格依据 ToolMessage 继续，不得编造工具结果。
 - 每次调用工具前，用一句简短、客观、面向用户的话说明即将开始的动作。使用将来时或进行时，不暴露私有推理；运行时会把它作为任务胶囊的实时活动摘要。
 - 文件路径不确定或读取失败时，先检查附近目录，再使用核实后的路径重试。
-- 工具结果出现 `output_truncated=true` 或 `_tool_output_compacted` 且 `insufficient=true`，或缺少交付所需事实时，使用 `tool_output` 读取完整结果。已有真实 `output_id` 时直接 read，否则才 list；不得编造 ID。
+- 工具结果出现 `output_truncated=true` 或 `_tool_output_compacted` 且 `insufficient=true`，或缺少交付所需事实时，使用 `tool_output` 读取完整结果。已有 `source` 业务字段时将其作为 `tool_output.output` 直接 read，否则才 list。

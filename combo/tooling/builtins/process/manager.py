@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 import logging
 import subprocess
@@ -12,6 +12,7 @@ from typing import Any, Callable, IO, Mapping
 
 from combo.tooling.builtins.process.runtime import ShellRuntime
 from combo.tooling.workspace_paths import resolve_workspace_path
+from combo.tooling.targets import select_target
 
 
 _OUTPUT_BUFFER_LIMIT = 1_000_000
@@ -69,6 +70,8 @@ class ManagedProcess:
     process: subprocess.Popen[str]
     shell_runtime: ShellRuntime
     started_at: float
+    mode: str
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     stdout: OutputBuffer = field(default_factory=OutputBuffer)
     stderr: OutputBuffer = field(default_factory=OutputBuffer)
     reader_threads: list[threading.Thread] = field(default_factory=list)
@@ -143,6 +146,7 @@ class ProcessManager:
             process=process,
             shell_runtime=shell_runtime,
             started_at=time.monotonic(),
+            mode=mode,
         )
         with self._lock:
             self._processes[process_id] = managed
@@ -172,6 +176,18 @@ class ProcessManager:
             managed.start_reported.set()
         return output
 
+    def resolve_target(self, selector: dict[str, Any]) -> str:
+        with self._lock:
+            managed = select_target(
+                (item for item in self._processes.values() if item.mode == "background"),
+                selector=selector, kind="background process",
+                describe=lambda item: {
+                    "command": item.command, "cwd": str(item.cwd),
+                    "started_at": item.created_at,
+                },
+            )
+            return managed.process_id
+
     def snapshot(
         self,
         *,
@@ -187,6 +203,7 @@ class ProcessManager:
                 "process_id": managed.process_id,
                 "status": managed.status(),
                 "command": managed.command,
+                "started_at": managed.created_at,
                 "shell": managed.shell_runtime.shell_id,
                 "shell_executable": str(managed.shell_runtime.executable),
                 "cwd": str(managed.cwd),
@@ -300,7 +317,7 @@ class ProcessManager:
     ) -> None:
         managed.process.wait()
         managed.finished_at = time.monotonic()
-        managed.completed_at = datetime.now(timezone.utc).isoformat()
+        managed.completed_at = datetime.now(UTC).isoformat()
         for thread in managed.reader_threads:
             thread.join(timeout=_OUTPUT_OBSERVATION_INTERVAL_SECONDS)
         with managed.changed:

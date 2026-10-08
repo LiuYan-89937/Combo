@@ -153,7 +153,6 @@ public struct AppSnapshot {
         let appReference = app.bundleIdentifier ?? app.name
 
         lines.append("App=\(appReference) (pid \(app.pid))")
-        lines.append("Observation: \(observationID). Use this observation_id for the next action.")
         lines.append("Window: \(quoted(displayTitle)), App: \(app.name).")
         if let size = screenshotPixelSize {
             lines.append("Screenshot: \(Int(size.width))x\(Int(size.height)) pixels. Origin is top-left; x increases right, y increases down. Valid coordinates: 0 <= x < \(Int(size.width)), 0 <= y < \(Int(size.height)). Use screenshot pixels, not desktop or window dimensions.")

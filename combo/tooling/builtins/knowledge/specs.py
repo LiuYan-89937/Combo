@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from combo.tooling.targets import target_schema
 from combo.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -58,18 +59,18 @@ def _input_schema() -> dict:
                 "type": "object",
                 "properties": {
                     "action": {"const": "list_documents", "description": "列出一个知识源中的文档。"},
-                    "source_id": {"type": "string", "minLength": 1, "description": "list_sources 返回的真实知识源 ID。"},
+                    "source": target_schema({"name": "Exact knowledge source name.", "created_at": "Creation time when names repeat."}),
                 },
-                "required": ["action", "source_id"],
+                "required": ["action", "source"],
                 "additionalProperties": False,
             },
             {
                 "type": "object",
                 "properties": {
                     "action": {"const": "read", "description": "读取指定知识文档的正文。"},
-                    "document_id": {"type": "string", "minLength": 1, "description": "搜索或文档列表返回的真实文档 ID。"},
+                    "document": target_schema({"title": "Exact document title.", "source": "Knowledge source name.", "created_at": "Creation time when titles repeat."}),
                 },
-                "required": ["action", "document_id"],
+                "required": ["action", "document"],
                 "additionalProperties": False,
             },
             {
@@ -87,9 +88,9 @@ def _input_schema() -> dict:
                 "type": "object",
                 "properties": {
                     "action": {"const": "remove_source", "description": "删除知识源及其关联文档。"},
-                    "source_id": {"type": "string", "minLength": 1, "description": "要删除的真实知识源 ID。"},
+                    "source": target_schema({"name": "Exact knowledge source name.", "created_at": "Creation time when names repeat."}),
                 },
-                "required": ["action", "source_id"],
+                "required": ["action", "source"],
                 "additionalProperties": False,
             },
         ]

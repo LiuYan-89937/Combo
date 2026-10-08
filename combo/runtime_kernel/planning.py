@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from graphlib import TopologicalSorter
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from combo.runtime_kernel.state import PlanEvent, PlanState, PlanStep, RuntimeState
+from combo.tooling.targets import TargetSelectionError, select_target
 
 
 RUNTIME_PLAN_TOOL_ID = "runtime_plan"
@@ -33,7 +35,7 @@ class RuntimePlanStepInput(BaseModel):
     objective: str = Field(description="What this step should understand, decide, produce, or verify for the user.")
     depends_on: list[str] = Field(
         default_factory=list,
-        description="Step ids that must be completed before this step can be started.",
+        description="Exact titles of prerequisite steps; the executor resolves their internal identities.",
     )
     acceptance_criteria: list[str] = Field(
         default_factory=list,
@@ -53,7 +55,7 @@ class RuntimePlanToolInput(BaseModel):
     goal: str | None = None
     steps: list[RuntimePlanStepInput] = Field(default_factory=list)
     step: RuntimePlanStepInput | None = None
-    step_id: str | None = None
+    step_title: str | None = Field(default=None, description="Exact target step title; omit to use the current step.")
     title: str | None = None
     objective: str | None = None
     acceptance_criteria: list[str] | None = None
@@ -71,6 +73,7 @@ class RuntimePlanToolResult(BaseModel):
     plan: PlanState
     status: Literal["completed", "execution_failed"] = "completed"
     message: str
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def runtime_plan_model_tool() -> StructuredTool:
@@ -108,6 +111,8 @@ def execute_runtime_plan_action(state: RuntimeState, arguments: dict[str, Any]) 
         request = RuntimePlanToolInput.model_validate(arguments)
         plan = _apply_action(state.plan.model_copy(deep=True), request)
         return RuntimePlanToolResult(plan=plan, message=_summary(plan))
+    except TargetSelectionError as exc:
+        return RuntimePlanToolResult(plan=state.plan, status="execution_failed", message=str(exc), candidates=exc.payload["candidates"])
     except Exception as exc:
         return RuntimePlanToolResult(
             plan=state.plan,
@@ -127,7 +132,7 @@ def _apply_action(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
     if action == "revise_step":
         return _revise_step(plan, request)
     if action == "start_step":
-        return _start_step(plan, request.step_id, reason=request.reason)
+        return _start_step(plan, _requested_step(plan, request.step_title).step_id, reason=request.reason)
     if action == "complete_step":
         return _complete_step(plan, request)
     if action == "fail_step":
@@ -160,8 +165,8 @@ def _create_plan(request: RuntimePlanToolInput) -> PlanState:
             step_id=f"step_{index}",
             title=_required_text(step.title, "step.title"),
             objective=_required_text(step.objective, "step.objective"),
-            status="in_progress" if index == 1 else "pending",
-            depends_on=list(step.depends_on),
+            status="pending",
+            depends_on=[],
             acceptance_criteria=list(step.acceptance_criteria),
             tool_hints=list(step.tool_hints),
             created_by="planner",
@@ -170,17 +175,21 @@ def _create_plan(request: RuntimePlanToolInput) -> PlanState:
         )
         for index, step in enumerate(request.steps, start=1)
     ]
+    _require_unique_titles(steps)
+    for step, source in zip(steps, request.steps):
+        step.depends_on = _dependency_ids(steps, source.depends_on)
+    TopologicalSorter({
+        step.title: set(source.depends_on) for step, source in zip(steps, request.steps)
+    }).prepare()
     plan = PlanState(
         goal=goal,
         status="active",
-        current_step_id=steps[0].step_id,
         steps=steps,
         events=[
             _event("created", reason=request.reason, payload={"goal": goal, "step_count": len(steps)}),
-            _event("step_started", step_id=steps[0].step_id, reason="initial step"),
         ],
     )
-    return plan
+    return _start_step(plan, _next_pending_step_id(plan), reason="initial step")
 
 
 def _add_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
@@ -198,13 +207,14 @@ def _add_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
         step_id=_next_step_id(plan),
         title=_required_text(source.title, "step.title"),
         objective=_required_text(source.objective, "step.objective"),
-        depends_on=list(source.depends_on),
+        depends_on=_dependency_ids(plan.steps, source.depends_on),
         acceptance_criteria=list(source.acceptance_criteria),
         tool_hints=list(source.tool_hints),
         created_by="runtime_plan",
         updated_at=_now(),
         metadata=dict(source.metadata),
     )
+    _require_unique_titles([*plan.steps, step])
     plan.steps.append(step)
     plan.events.append(_event("step_added", step_id=step.step_id, reason=request.reason, payload=_step_summary(step)))
     if plan.current_step_id is None:
@@ -214,9 +224,11 @@ def _add_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
 
 def _revise_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
     _require_active_plan(plan)
-    step = _step(plan, request.step_id)
+    step = _requested_step(plan, request.step_title)
     if request.title is not None:
-        step.title = _required_text(request.title, "title")
+        new_title = _required_text(request.title, "title")
+        _require_unique_titles([item.model_copy(update={"title": new_title}) if item.step_id == step.step_id else item for item in plan.steps])
+        step.title = new_title
     if request.objective is not None:
         step.objective = _required_text(request.objective, "objective")
     if request.acceptance_criteria is not None:
@@ -234,7 +246,10 @@ def _start_step(plan: PlanState, step_id: str | None, *, reason: str = "") -> Pl
     _require_active_plan(plan)
     target = _step(plan, step_id or plan.current_step_id or _next_pending_step_id(plan))
     if target.status not in {"pending", "in_progress"}:
-        raise ValueError(f"cannot start step with status {target.status}: {target.step_id}")
+        raise ValueError(f"cannot start step with status {target.status}: {target.title}")
+    unfinished = [step.title for step in plan.steps if step.step_id in target.depends_on and step.status not in {"completed", "skipped"}]
+    if unfinished:
+        raise ValueError(f"prerequisite steps are unfinished: {unfinished}")
     for item in plan.steps:
         if item.status == "in_progress" and item.step_id != target.step_id:
             item.status = "pending"
@@ -248,9 +263,9 @@ def _start_step(plan: PlanState, step_id: str | None, *, reason: str = "") -> Pl
 
 def _complete_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
     _require_active_plan(plan)
-    step = _step(plan, request.step_id or plan.current_step_id)
+    step = _requested_step(plan, request.step_title)
     if step.status not in {"pending", "in_progress"}:
-        raise ValueError(f"cannot complete step with status {step.status}: {step.step_id}")
+        raise ValueError(f"cannot complete step with status {step.status}: {step.title}")
     step.status = "completed"
     step.result_summary = request.result_summary or step.result_summary
     step.evidence = [*step.evidence, *request.evidence]
@@ -273,7 +288,7 @@ def _complete_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
 
 def _fail_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
     _require_active_plan(plan)
-    step = _step(plan, request.step_id or plan.current_step_id)
+    step = _requested_step(plan, request.step_title)
     step.status = "failed"
     step.result_summary = request.result_summary or step.result_summary
     step.evidence = [*step.evidence, *request.evidence]
@@ -294,9 +309,9 @@ def _fail_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
 
 def _skip_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
     _require_active_plan(plan)
-    step = _step(plan, request.step_id)
+    step = _requested_step(plan, request.step_title)
     if step.status in {"completed", "failed"}:
-        raise ValueError(f"cannot skip step with status {step.status}: {step.step_id}")
+        raise ValueError(f"cannot skip step with status {step.status}: {step.title}")
     step.status = "skipped"
     step.updated_at = _now()
     plan.events.append(_event("step_skipped", step_id=step.step_id, reason=request.reason))
@@ -335,14 +350,44 @@ def _require_active_plan(plan: PlanState) -> None:
         raise ValueError(f"plan is not active: {plan.status}")
 
 
+def _requested_step(plan: PlanState, title: str | None) -> PlanStep:
+    if title is None:
+        return _step(plan, plan.current_step_id or _next_pending_step_id(plan))
+    return select_target(plan.steps, selector={"title": title}, kind="plan step", describe=lambda step: {"title": step.title})
+
+
+def _dependency_ids(steps: list[PlanStep], titles: list[str]) -> list[str]:
+    return [select_target(steps, selector={"title": title}, kind="prerequisite step", describe=lambda step: {"title": step.title}).step_id for title in titles]
+
+
+def _require_unique_titles(steps: list[PlanStep]) -> None:
+    titles = [step.title for step in steps]
+    if len(set(titles)) != len(titles):
+        raise ValueError("plan step titles must be unique")
+
+
 def _step(plan: PlanState, step_id: str | None) -> PlanStep:
     value = (step_id or "").strip()
     if not value:
-        raise ValueError("step_id is required")
+        raise ValueError("there is no current or executable pending step; select a step by title")
     for step in plan.steps:
         if step.step_id == value:
             return step
-    raise ValueError(f"unknown step_id: {value}")
+    raise ValueError("the selected plan step no longer exists")
+
+
+def plan_model_payload(plan: PlanState) -> dict[str, Any]:
+    """Expose plan business fields while retaining identities in runtime state."""
+    titles = {step.step_id: step.title for step in plan.steps}
+    payload = plan.model_dump(mode="json", exclude={"events", "current_step_id"})
+    payload["current_step"] = titles.get(plan.current_step_id)
+    for step in payload["steps"]:
+        step.pop("step_id")
+        step["depends_on"] = [titles[dependency] for dependency in step["depends_on"]]
+    execution = payload.get("last_execution")
+    if execution:
+        execution["step_title"] = titles.get(execution.pop("step_id", None))
+    return payload
 
 
 def _next_pending_step_id(plan: PlanState) -> str | None:
@@ -380,7 +425,8 @@ def _summary(plan: PlanState) -> str:
     for step in plan.steps:
         counts[step.status] = counts.get(step.status, 0) + 1
     parts = [f"{key}={value}" for key, value in sorted(counts.items())]
-    current = f", current={plan.current_step_id}" if plan.current_step_id else ""
+    current_step = next((step for step in plan.steps if step.step_id == plan.current_step_id), None)
+    current = f", current={current_step.title}" if current_step else ""
     return f"Plan {plan.status}{current}; " + (", ".join(parts) if parts else "no steps")
 
 

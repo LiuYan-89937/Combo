@@ -671,7 +671,8 @@ public final class ComputerUseService {
         return ToolCallResult(
             content: result.content + [.text(note)],
             inputResult: ["target_scope": target.scope, "verification": "unconfirmed"],
-            application: result.application
+            application: result.application,
+            observationID: result.observationID
         )
     }
 
@@ -871,7 +872,8 @@ public final class ComputerUseService {
             return ToolCallResult(
                 content: result.content + [.text("Keyboard events posted to the bound target. Inspect the new observation to verify the effect; AX text and selection may describe an editor proxy. Do not automatically replay.")],
                 inputResult: evidence,
-                application: result.application
+                application: result.application,
+                observationID: result.observationID
             )
         } catch {
             return ToolCallResult(content: [.text("[observation.unavailable] Keyboard events were posted, but the next observation is unavailable. Obtain a new state without replaying the action.")],
@@ -1647,7 +1649,8 @@ public final class ComputerUseService {
         }
         return ToolCallResult(
             content: content,
-            application: ToolResultApplication(snapshot: snapshot)
+            application: ToolResultApplication(snapshot: snapshot),
+            observationID: snapshot.observationID
         )
     }
 }

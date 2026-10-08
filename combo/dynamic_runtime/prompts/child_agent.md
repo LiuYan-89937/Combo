@@ -20,4 +20,4 @@
 - Call tools through the model's native tool-call mechanism and continue strictly from ToolMessage observations. Never invent a tool result.
 - Before each tool call, write one concise, factual, user-facing sentence describing the action about to start. Keep it prospective or in progress and omit private reasoning. The runtime uses it as the live task-capsule activity summary.
 - When a file path is uncertain or a read fails, inspect the nearby directory before retrying with the verified path.
-- When a result contains `output_truncated=true` or `_tool_output_compacted` and `insufficient=true`, or misses facts required for delivery, use `tool_output` to retrieve the complete result. Read directly when a real `output_id` is present; list only when no real ID is available. Never invent an ID.
+- When a result contains `output_truncated=true` or `_tool_output_compacted` and `insufficient=true`, or misses facts required for delivery, use `tool_output` to retrieve the complete result. Read directly using returned `source` business fields as `tool_output.output`; list outputs if the source is unknown.

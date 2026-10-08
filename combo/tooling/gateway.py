@@ -32,6 +32,7 @@ from combo.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge
 from combo.tooling.schema_compiler import CompiledJsonSchema, validation_failure_message
 from combo.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
 from combo.tooling.envelope import unpack_tool_envelope
+from combo.tooling.targets import TargetSelectionError
 from combo.tooling.runtime_resources import resolve_resource_selector
 
 
@@ -192,6 +193,11 @@ class ToolExecutionGateway:
                 arguments=arguments,
                 retryable=True,
                 errors=[str(exc)],
+            )
+        except TargetSelectionError as exc:
+            return self._observation(
+                "execution_failed", str(exc), tool_call_id=tool_call_id,
+                arguments=arguments, output=exc.payload, retryable=True,
             )
         except Exception as exc:
             errors = exception_leaf_messages(exc)

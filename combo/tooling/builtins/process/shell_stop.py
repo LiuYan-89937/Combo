@@ -4,7 +4,6 @@ from typing import Any
 
 from combo.tooling.builtins.process.manager import (
     bounded_int,
-    required_string,
     require_process_runtime,
 )
 from combo.tooling.envelope import tool_envelope
@@ -13,12 +12,6 @@ from combo.tooling.spec import ToolRiskResult
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     _ = context
-    if not isinstance(arguments.get("process_id"), str) or not arguments.get("process_id", "").strip():
-        return ToolRiskResult(
-            action="deny",
-            risk_level="medium",
-            reasons=["process_id is required"],
-        ).model_dump(mode="json")
     return ToolRiskResult(
         action="ask",
         risk_level="medium",
@@ -27,10 +20,11 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    process_id = required_string(arguments, "process_id")
+    runtime = require_process_runtime(resources)
+    process_id = runtime.manager.resolve_target(dict(arguments.get("process") or {}))
     grace_seconds = bounded_int(arguments, "grace_seconds", default=2, minimum=0, maximum=300)
     return tool_envelope(
-        require_process_runtime(resources).manager.stop(
+        runtime.manager.stop(
             process_id=process_id,
             grace_seconds=grace_seconds,
         )

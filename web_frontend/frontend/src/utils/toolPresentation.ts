@@ -230,9 +230,23 @@ function toolArgumentPresentation(
   if (toolName === 'read' || toolName === 'write') {
     return summary(compact(args.path))
   }
-  if (toolName === 'shell_status' || toolName === 'shell_stop') return summary(compact(args.process_id))
-  if (toolName === 'knowledge') return summary(compact(args.action, args.query))
-  if (toolName === 'scheduler') return summary(compact(args.action, args.job_id))
+  if (toolName === 'shell_status' || toolName === 'shell_stop') {
+    const process = recordValue(args.process)
+    return summary(compact(process?.command, process?.cwd))
+  }
+  if (toolName === 'tool_output') {
+    const output = recordValue(args.output)
+    return summary(compact(args.action, output?.tool, args.path))
+  }
+  if (toolName === 'knowledge') {
+    const source = recordValue(args.source)
+    const document = recordValue(args.document)
+    return summary(compact(args.action, args.query, source?.name, document?.title))
+  }
+  if (toolName === 'scheduler') {
+    const task = recordValue(args.task)
+    return summary(compact(args.action, task?.task_content || args.task_content))
+  }
   if (toolName === 'skillhub') return summary(compact(args.action, args.query || args.slug))
   if (toolName === 'skill') {
     return String(args.action || '') === 'load' ? summary(compact(args.name)) : { summary: '' }
@@ -240,11 +254,12 @@ function toolArgumentPresentation(
   if (toolName === 'capability') return summary(compact(args.action, args.query))
   if (toolName === 'memory') return summary(compact(args.action, args.query || args.kind))
   if (toolName === 'delegate') return summary(compact(args.agent_name, args.objective))
-  if (toolName === 'delegate_continue') return summary(compact(args.instruction))
-  if (toolName === 'delegate_message') return summary(compact(args.message))
+  if (toolName === 'delegate_continue') return summary(compact(args.agent_name, args.instruction))
+  if (toolName === 'delegate_message') return summary(compact(args.agent_name, args.message))
   if (toolName === 'delegation_status') return { summary: '' }
   if (toolName.startsWith('browser_')) {
-    return summary(compact(args.url, args.path, args.key, args.format, args.milliseconds))
+    const page = recordValue(args.page)
+    return summary(compact(args.url || page?.title || page?.url, args.path, args.key, args.format, args.milliseconds))
   }
   if (toolName.startsWith('agent_')) return summary(compact(args.query, args.package_id || args.agent_id))
   return { summary: '' }

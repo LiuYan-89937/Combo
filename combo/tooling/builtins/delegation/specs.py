@@ -113,7 +113,7 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
             id="delegate_continue",
             description=(
                 "Start a new revision of a terminal child-Agent task while retaining that logical Agent's "
-                "checkpoint conversation and workspace. Use the exact task_ref returned by delegate or "
+                "checkpoint conversation and workspace. Use the exact agent_name returned by delegate or "
                 "delegation_status. Example: after a research task finishes but lacks citations, continue it "
                 "with instruction 'Add dated primary-source citations and revise the conclusions.' Do not use "
                 "this for a running task; send it a direct message instead."
@@ -123,11 +123,13 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "task_ref": {
+                    "agent_name": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Exact opaque task_ref returned by delegate or delegation_status.",
+                        "description": "Exact child Agent role name. Use objective as well when names repeat.",
                     },
+                    "objective": {"type": "string", "minLength": 1, "description": "Current task objective, used to distinguish repeated Agent names."},
+                    "created_at": {"type": "string", "minLength": 1, "description": "Task revision creation time returned by delegate or delegation_status; distinguishes otherwise identical tasks."},
                     "instruction": {
                         "type": "string",
                         "minLength": 1,
@@ -141,7 +143,7 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                         "description": "Optional revised acceptance criteria; empty preserves the previous criteria.",
                     },
                 },
-                "required": ["task_ref", "instruction"],
+                "required": ["agent_name", "instruction"],
             },
             output_schema={"type": "object"},
             resources={DELEGATION_RUNTIME_RESOURCE: DELEGATION_RUNTIME_RESOURCE},
@@ -157,7 +159,7 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
             description=(
                 "Insert a user-role message directly into a running child Agent without cancelling its current "
                 "tool or model generation. The child consumes it at the next safe graph boundary and can change "
-                "direction. Use the exact task_ref returned by delegate or delegation_status. Example: while a "
+                "direction. Use the exact agent_name returned by delegate or delegation_status. Example: while a "
                 "research task is running, send 'Stop comparing consumer plans; focus only on enterprise pricing.' "
                 "For a terminal task, use delegate_continue instead."
             ),
@@ -166,18 +168,20 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "task_ref": {
+                    "agent_name": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Exact opaque task_ref returned by delegate or delegation_status.",
+                        "description": "Exact child Agent role name. Use objective as well when names repeat.",
                     },
+                    "objective": {"type": "string", "minLength": 1, "description": "Current task objective, used to distinguish repeated Agent names."},
+                    "created_at": {"type": "string", "minLength": 1, "description": "Task revision creation time returned by delegate or delegation_status; distinguishes otherwise identical tasks."},
                     "message": {
                         "type": "string",
                         "minLength": 1,
                         "description": "Direct instruction inserted into the running child Agent.",
                     },
                 },
-                "required": ["task_ref", "message"],
+                "required": ["agent_name", "message"],
             },
             output_schema={"type": "object"},
             resources={DELEGATION_RUNTIME_RESOURCE: DELEGATION_RUNTIME_RESOURCE},
@@ -191,9 +195,9 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="delegation_status",
             description=(
-                "Inspect all temporary agent tasks in the current conversation and return each task_ref, current "
+                "Inspect all temporary agent tasks in the current conversation and return each agent_name, current "
                 "revision, status, and delivery details. Use this for an explicit progress request or after a "
-                "completion notification, not as a polling loop. Pass a returned task_ref to delegate_message or "
+                "completion notification, not as a polling loop. Pass a returned agent_name to delegate_message or "
                 "delegate_continue when the original delegate result is no longer in context."
             ),
             entrypoint="combo.tooling.builtins.delegation.tool:status",

@@ -3,17 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 
 from combo.tooling.builtins.browser.runtime import BROWSER_RUNTIME_RESOURCE
+from combo.tooling.targets import target_schema
 from combo.tooling.spec import ToolEffect, ToolLoopPolicyConfig, ToolRiskLevel, ToolSpec
 
 _STRING = {"type": "string"}
-_ACTIVE_PAGE_ID = {
-    "type": "string",
-    "description": "Page handle returned by browser_open; omit to use the active page.",
-}
-_OPEN_PAGE_ID = {
-    "type": "string",
-    "description": "Existing page handle to navigate. Omit to reuse the active page, or set new_page=true to create another page.",
-}
+_PAGE_TARGET = target_schema({"url": "Exact URL of an existing page.", "title": "Exact page title; combine with URL when needed."})
 _RUNTIME_RESOURCES = {
     "browser_runtime": BROWSER_RUNTIME_RESOURCE,
     "runtime_identity": "runtime_identity",
@@ -104,14 +98,14 @@ def get_browser_tool_specs() -> list[ToolSpec]:
     specs = [
         _spec(
             "browser_open",
-            "Navigate an isolated browser page to an HTTP or HTTPS URL. By default this reuses the active page and returns as soon as ordinary navigation is committed; suspected access interstitials receive one bounded stabilization wait. Inspect page_state before drawing conclusions. When page_state is verification_required or authentication_required, immediately stop all browser operations, tell the user in the main conversation to take control and complete the step manually, then end the current response and wait for the user. Do not retry or call another browser tool until the user confirms completion. After confirmation, call browser_snapshot once to verify the resulting page before continuing. Neither state proves that the website is unavailable. Pass page_id to navigate a specific existing page, or set new_page=true only when another simultaneous page is intentionally required.",
+            "Navigate an isolated browser page to an HTTP or HTTPS URL. By default this reuses the active page and returns as soon as ordinary navigation is committed; suspected access interstitials receive one bounded stabilization wait. Inspect page_state before drawing conclusions. When page_state is verification_required or authentication_required, immediately stop all browser operations, tell the user in the main conversation to take control and complete the step manually, then end the current response and wait for the user. Do not retry or call another browser tool until the user confirms completion. After confirmation, call browser_snapshot once to verify the resulting page before continuing. Neither state proves that the website is unavailable. Pass page business fields to navigate a specific existing page, or set new_page=true only when another simultaneous page is intentionally required.",
             {
                 "url": {"type": "string", "description": "Absolute HTTP or HTTPS URL to open."},
-                "page_id": _OPEN_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "new_page": {
                     "type": "boolean",
                     "default": False,
-                    "description": "Create an additional page instead of reusing the active page. Cannot be combined with page_id.",
+                    "description": "Create an additional page instead of reusing the active page. Cannot be combined with page.",
                 },
                 "wait_until": {
                     "type": "string",
@@ -138,7 +132,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_snapshot",
             "Read the current page state, structured text, and optional links. Use this before interacting when page state is uncertain and once after the user confirms that manual sign-in or human verification is complete. If verification_required or authentication_required remains, stop browser operations, notify the user, end the current response, and wait. Do not repeatedly retry browser tools. A verification failure in the isolated browser is not evidence that the website itself is unavailable.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "max_chars": {
                     "type": "integer",
                     "minimum": 1000,
@@ -174,7 +168,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_click",
             "Click an element on the active browser page. Navigation triggered by the click continues in the live browser; use browser_snapshot or browser_wait when the next action requires the destination content.",
-            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET)},
+            {"page": _PAGE_TARGET, "target": deepcopy(_TARGET)},
             required=["target"],
             risk_level="medium",
             effects=("network", "external_side_effect"),
@@ -183,7 +177,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_type",
             "Enter text into an input element. Set submit only when pressing Enter is intended.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "target": deepcopy(_TARGET),
                 "text": {"type": "string", "description": "Text to enter into the selected input."},
                 "clear": {"type": "boolean", "default": True, "description": "Clear the current input value before typing."},
@@ -197,7 +191,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_select",
             "Select one or more values from a browser select element.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "target": deepcopy(_TARGET),
                 "values": {"type": "array", "items": _STRING, "minItems": 1, "description": "Option values to select."},
             },
@@ -208,7 +202,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_press",
             "Press a keyboard key or shortcut on an element or the active page.",
-            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "key": {"type": "string", "description": "Playwright key or shortcut such as Enter, Escape, or Control+A."}},
+            {"page": _PAGE_TARGET, "target": deepcopy(_TARGET), "key": {"type": "string", "description": "Playwright key or shortcut such as Enter, Escape, or Control+A."}},
             required=["key"],
             risk_level="medium",
             effects=("network", "external_side_effect"),
@@ -217,7 +211,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_scroll",
             "Scroll the active page or a scrollable element by pixel deltas.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "target": deepcopy(_TARGET),
                 "delta_x": {"type": "integer", "default": 0, "description": "Horizontal scroll distance in pixels."},
                 "delta_y": {"type": "integer", "default": 600, "description": "Vertical scroll distance in pixels."},
@@ -227,7 +221,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_wait",
             "Wait for a bounded duration or for an element to reach a requested state.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "target": deepcopy(_TARGET),
                 "milliseconds": {
                     "type": "integer",
@@ -249,7 +243,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "Extract text, HTML, or links from the page or all elements matching a CSS selector. "
             "Text and HTML from multiple matches are joined with blank lines in document order.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "selector": {"type": "string", "description": "Optional CSS selector selecting one or more subtrees. All matches are extracted in document order; defaults to body."},
                 "format": {"type": "string", "enum": ["text", "html", "links"], "default": "text", "description": "Content representation to extract."},
                 "max_chars": {
@@ -272,7 +266,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_screenshot",
             "Capture the current page as a PNG and return it to the vision-capable model. This tool is hidden from text-only models.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "target": deepcopy(_TARGET),
                 "full_page": {"type": "boolean", "default": False, "description": "Capture the entire scrollable page instead of the viewport or target."},
                 "path": {"type": "string", "description": "Optional workspace-relative PNG output path."},
@@ -304,7 +298,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_download",
             "Click a download target and save the resulting file inside the current workspace.",
-            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "path": {"type": "string", "description": "Optional workspace-relative destination path for the downloaded file."}},
+            {"page": _PAGE_TARGET, "target": deepcopy(_TARGET), "path": {"type": "string", "description": "Optional workspace-relative destination path for the downloaded file."}},
             required=["target"],
             output_properties={
                 **_PAGE_RESULT_PROPERTIES,
@@ -325,7 +319,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_upload",
             "Upload user-authorized files from the current workspace through a file input. Requires approval.",
             {
-                "page_id": _ACTIVE_PAGE_ID,
+                "page": _PAGE_TARGET,
                 "target": deepcopy(_TARGET),
                 "paths": {"type": "array", "items": _STRING, "minItems": 1, "description": "User-authorized workspace-relative files to upload."},
             },
@@ -365,7 +359,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_close",
             "Close one browser page, or close the entire isolated browser context for this Agent session.",
-            {"page_id": _ACTIVE_PAGE_ID, "close_context": {"type": "boolean", "default": False, "description": "Close every page and release the isolated browser context instead of one page."}},
+            {"page": _PAGE_TARGET, "close_context": {"type": "boolean", "default": False, "description": "Close every page and release the isolated browser context instead of one page."}},
             output_properties={
                 "browser_view_id": {"type": ["string", "null"]},
                 "browser_view_action": {"type": "string", "enum": ["close", "update"]},

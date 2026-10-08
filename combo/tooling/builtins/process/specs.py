@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from combo.tooling.builtins.process.runtime import host_shell_display_name
+from combo.tooling.targets import target_schema
 from combo.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
 _STRING = {"type": "string"}
 _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
+_PROCESS_TARGET = target_schema({"command": "Exact command text.", "cwd": "Working directory returned by shell.", "started_at": "Start time returned by shell; distinguishes repeated commands."})
 _PROCESS_RESOURCE = {"process_runtime": "process_runtime"}
 _PROCESS_MODULE = "combo.tooling.builtins.process"
 _CWD_BOUNDARY_DESCRIPTION = (
@@ -23,6 +25,7 @@ _PROCESS_OUTPUT_SCHEMA = {
         "process_id": _STRING,
         "status": {"type": "string", "enum": _PROCESS_STATUS_VALUES},
         "command": _STRING,
+        "started_at": _STRING,
         "shell": _STRING,
         "shell_executable": _STRING,
         "cwd": _STRING,
@@ -39,6 +42,7 @@ _PROCESS_OUTPUT_SCHEMA = {
         "process_id",
         "status",
         "command",
+        "started_at",
         "shell",
         "shell_executable",
         "cwd",
@@ -64,7 +68,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
             "文件路径发现和文件内容搜索使用 rg，按行读取文件使用 read。"
             "子进程默认已位于当前会话工作区根目录，命令应直接使用相对路径，无需先执行 cd。"
             "foreground 持续显示 stdout/stderr，并在工具超时范围内等待命令结束。"
-            "渲染、构建等长任务或服务使用 background，立即返回 process_id；结束结果会自动通知。"
+            "渲染、构建等长任务或服务使用 background，立即返回命令、目录和开始时间；结束结果会自动通知。"
             "需要继续检查时调用 shell_status，不要用 sleep 等待或自行使用 nohup、& 脱离托管。"
         ),
         entrypoint="combo.tooling.builtins.process.shell:run",
@@ -84,7 +88,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "default": "foreground",
                     "description": (
                         "短命令使用 foreground；长任务和服务使用 background。"
-                        "background 返回 process_id，进程不受本次启动调用的超时限制，结束后自动通知。"
+                        "background 返回进程的业务信息，进程不受本次启动调用的超时限制，结束后自动通知。"
                     ),
                 },
             },
@@ -103,17 +107,18 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         id="shell_status",
         description=(
             "查看后台进程状态和输出；可等待结束，或传 after_revision 等待新输出。后台结束结果会自动通知，无需反复轮询。"
+            "使用 process 中的 command、cwd、started_at 定位；只有唯一后台进程时才可省略 process。"
             "不要对 foreground 命令调用；foreground 会在原 shell 调用中持续输出并直接返回最终状态。"
         ),
         entrypoint="combo.tooling.builtins.process.shell_status:run",
         input_schema={
             "type": "object",
             "properties": {
-                "process_id": {"type": "string", "description": "shell 返回的 process_id。"},
+                "process": _PROCESS_TARGET,
                 "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 60, "default": 0, "description": "最多等待多少秒；0 立即返回。等待超时不终止进程。"},
                 "after_revision": {"type": "integer", "minimum": 0, "description": "上次返回的 output_revision；有新输出或进程结束时提前返回。"},
             },
-            "required": ["process_id"],
+            "required": [],
             "additionalProperties": False,
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
@@ -127,12 +132,12 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="shell_stop",
-        description="终止由 shell 工具启动的进程树，并返回最终状态和输出。",
+        description="终止由 shell 工具启动的后台进程树，并返回最终状态和输出。使用 process 中的 command、cwd、started_at 定位；只有唯一后台进程时才可省略 process。",
         entrypoint="combo.tooling.builtins.process.shell_stop:run",
         input_schema={
             "type": "object",
             "properties": {
-                "process_id": {"type": "string", "description": "shell 返回的 process_id。"},
+                "process": _PROCESS_TARGET,
                 "grace_seconds": {
                     "type": "integer",
                     "minimum": 0,
@@ -141,7 +146,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "description": "请求进程树终止后等待多少秒再强制终止。",
                 },
             },
-            "required": ["process_id"],
+            "required": [],
             "additionalProperties": False,
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,

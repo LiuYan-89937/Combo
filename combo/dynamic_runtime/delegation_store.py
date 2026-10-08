@@ -330,22 +330,6 @@ class DelegationStore:
             status=str(row["status"]),
         )
 
-    def latest_for_session(
-        self,
-        *,
-        principal_id: str,
-        session_id: str,
-        task_id: str,
-    ) -> DelegatedTaskRecord:
-        records = self.list_for_session(
-            principal_id=principal_id,
-            session_id=session_id,
-            task_id=task_id,
-        )
-        if not records:
-            raise LookupError("delegated task not found in the current session")
-        return records[0]
-
     def previous_revision(
         self,
         *,

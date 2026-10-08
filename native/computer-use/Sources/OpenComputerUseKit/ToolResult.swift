@@ -71,19 +71,22 @@ public struct ToolCallResult: @unchecked Sendable {
     public let diagnostics: [String]
     public let inputResult: [String: String]
     public let application: ToolResultApplication?
+    public let observationID: String?
 
     public init(
         content: [ToolResultContentItem],
         isError: Bool = false,
         diagnostics: [String] = [],
         inputResult: [String: String] = [:],
-        application: ToolResultApplication? = nil
+        application: ToolResultApplication? = nil,
+        observationID: String? = nil
     ) {
         self.content = content
         self.isError = isError
         self.diagnostics = diagnostics
         self.inputResult = inputResult
         self.application = application
+        self.observationID = observationID
     }
 
     public var primaryText: String? {
@@ -99,6 +102,9 @@ public struct ToolCallResult: @unchecked Sendable {
         ]
         if let application {
             result["application"] = application.asDictionary
+        }
+        if let observationID {
+            result["observation_id"] = observationID
         }
         return result
     }

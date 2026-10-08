@@ -9,6 +9,7 @@ from combo.tooling.builtins.scheduler.specs import (
     SCHEDULER_RUNTIME_RESOURCE,
 )
 from combo.tooling.envelope import tool_envelope
+from combo.tooling.targets import select_target
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -30,16 +31,16 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     identity = _require_main(identity)
     action = str(arguments.get("action") or "").strip()
     if action == "list":
-        output = {"action": action, "jobs": store.jobs((identity.workspace_id,))}
+        output = {"action": action, "jobs": [_public_job(job) for job in store.jobs((identity.workspace_id,))]}
     elif action == "describe":
-        output = {"action": action, "job": _owned_job(store, identity, arguments)}
+        output = {"action": action, "job": _public_job(_owned_job(store, identity, arguments))}
     elif action == "create":
         schedule_type = _required_text(arguments, "schedule_type")
         schedule_expr = _required_text(arguments, "schedule_expr")
         timezone = _required_text(arguments, "timezone")
         output = {
             "action": action,
-            "job": store.create_job({
+            "job": _public_job(store.create_job({
                 "workspace_id": identity.workspace_id,
                 "source_session_id": identity.session_id,
                 "task_content": _required_text(arguments, "task_content"),
@@ -49,13 +50,13 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 "strategy": str(arguments.get("strategy") or "auto"),
                 "approval_policy": str(arguments.get("approval_policy") or "ask"),
                 "execution_mode": arguments.get("execution_mode"),
-            }),
+            })),
         }
     elif action in {"pause", "resume", "delete"}:
         job = _owned_job(store, identity, arguments)
         status = {"pause": "paused", "resume": "enabled", "delete": "deleted"}[action]
         store.set_status(str(job["job_id"]), status)
-        output = {"action": action, "job_id": str(job["job_id"]), "status": status}
+        output = {"action": action, "task": _job_target(job), "status": status}
     else:
         raise ValueError(f"unsupported scheduler action: {action}")
     return tool_envelope(output, summary=f"scheduler {action} completed")
@@ -66,10 +67,18 @@ def _owned_job(
     identity: RuntimeExecutionIdentity,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    job = store.require_job(_required_text(arguments, "job_id"))
-    if str(job.get("workspace_id") or "") != identity.workspace_id:
-        raise PermissionError("scheduled task belongs to a different workspace")
-    return job
+    return select_target(
+        store.jobs((identity.workspace_id,)), selector=dict(arguments["task"]),
+        kind="scheduled task", describe=_job_target,
+    )
+
+
+def _job_target(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: job[key] for key in ("task_content", "schedule_expr", "created_at")}
+
+
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in job.items() if key not in {"job_id", "workspace_id", "source_session_id", "principal_id"}}
 
 
 def _require_main(identity: Any) -> RuntimeExecutionIdentity:
