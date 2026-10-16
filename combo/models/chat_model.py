@@ -60,7 +60,6 @@ class ChatModelSettings:
                 "effort": self.reasoning.effort,
                 "summary": self.reasoning.summary,
                 "budget_tokens": self.reasoning.budget_tokens,
-                "send_history": self.reasoning.send_history,
                 "supported": capabilities.reasoning,
             },
             "capabilities": provider_profile_payload(self.profile),

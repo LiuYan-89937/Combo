@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prepare-dependencies": "node ../../scripts/prepare_frontend_dependencies.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

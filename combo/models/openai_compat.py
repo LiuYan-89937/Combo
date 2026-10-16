@@ -8,8 +8,6 @@ from langchain_openai import ChatOpenAI
 
 from combo.model_image_inputs import prepare_model_image_messages
 from combo.models.reasoning import (
-    coerce_reasoning_content,
-    reasoning_content_from_blocks,
     reasoning_content_from_message,
     reasoning_content_from_raw_message,
     reasoning_content_from_stream_chunk,
@@ -17,9 +15,7 @@ from combo.models.reasoning import (
 
 
 class ThinkingCompatibleChatOpenAI(ChatOpenAI):
-    """ChatOpenAI adapter for OpenAI-compatible thinking-mode providers."""
-
-    preserve_reasoning_content: bool = False
+    """Preserve provider reasoning independently of generation settings."""
 
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
         source_messages = self._convert_input(input_).to_messages()
@@ -29,8 +25,6 @@ class ThinkingCompatibleChatOpenAI(ChatOpenAI):
             **kwargs,
         )
         _normalize_tool_call_arguments_payload(payload.get("messages"))
-        if not self.preserve_reasoning_content:
-            return payload
         payload_messages = payload.get("messages")
         if isinstance(payload_messages, list):
             _patch_reasoning_content_payload(payload_messages, source_messages)
@@ -44,7 +38,7 @@ class ThinkingCompatibleChatOpenAI(ChatOpenAI):
             message = generation.message
             if not isinstance(message, AIMessage):
                 continue
-            reasoning_content = _reasoning_content_from_raw_message(choice.get("message") or {})
+            reasoning_content = reasoning_content_from_raw_message(choice.get("message") or {})
             if reasoning_content is not None:
                 message.additional_kwargs["reasoning_content"] = reasoning_content
         return result
@@ -107,40 +101,9 @@ def _patch_reasoning_content_payload(
     payload_messages: list[dict[str, Any]],
     source_messages: list[BaseMessage],
 ) -> None:
-    source_index = 0
-    for payload_message in payload_messages:
-        if payload_message.get("role") != "assistant":
-            continue
-        source_entry = _next_ai_message(source_messages, source_index)
-        if source_entry is None:
-            continue
-        source_index, source_message = source_entry
-        source_index += 1
-        reasoning_content = _reasoning_content_from_ai_message(source_message)
+    source_assistants = (message for message in source_messages if isinstance(message, AIMessage))
+    payload_assistants = (message for message in payload_messages if message.get("role") == "assistant")
+    for payload_message, source_message in zip(payload_assistants, source_assistants, strict=True):
+        reasoning_content = reasoning_content_from_message(source_message)
         if reasoning_content is not None:
             payload_message["reasoning_content"] = reasoning_content
-        elif payload_message.get("tool_calls"):
-            payload_message["reasoning_content"] = ""
-
-
-def _next_ai_message(messages: list[BaseMessage], start: int) -> tuple[int, AIMessage] | None:
-    for index, message in enumerate(messages[start:], start=start):
-        if isinstance(message, AIMessage):
-            return index, message
-    return None
-
-
-def _reasoning_content_from_raw_message(message: dict[str, Any]) -> str | None:
-    return reasoning_content_from_raw_message(message)
-
-
-def _reasoning_content_from_ai_message(message: AIMessage) -> str | None:
-    return reasoning_content_from_message(message)
-
-
-def _reasoning_content_from_blocks(content: Any) -> str | None:
-    return reasoning_content_from_blocks(content)
-
-
-def _coerce_reasoning_content(value: Any) -> str | None:
-    return coerce_reasoning_content(value)

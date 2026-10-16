@@ -36,15 +36,15 @@ class TextPart(FrozenProtocolModel):
 
 class ReasoningPart(FrozenProtocolModel):
     kind: Literal["reasoning"] = "reasoning"
-    text: str
+    # None means no textual reasoning field; an empty string is a provider value.
+    text: str | None = None
+    provider_blocks: tuple[dict[str, JsonValue], ...] = ()
 
-    @field_validator("text")
-    @classmethod
-    def _text_is_present(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("reasoning part must not be empty")
-        return text
+    @model_validator(mode="after")
+    def _reasoning_is_present(self) -> "ReasoningPart":
+        if self.text is None and not self.provider_blocks:
+            raise ValueError("reasoning part requires a text field or provider blocks")
+        return self
 
 
 class AttachmentPart(FrozenProtocolModel):
@@ -97,6 +97,8 @@ class ToolResultPart(FrozenProtocolModel):
     tool_call_id: str
     status: Literal["completed", "failed", "cancelled", "rejected", "timed_out"]
     output: dict[str, JsonValue] | None = None
+    # Preserve image references across conversation storage and graph recovery.
+    image_parts: tuple[dict[str, JsonValue], ...] = ()
     error_code: str | None = None
     started_at: str | None = None
     completed_at: str | None = None

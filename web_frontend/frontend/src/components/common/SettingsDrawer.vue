@@ -117,12 +117,6 @@
           </header>
 
           <div class="group-body">
-            <div class="field-block">
-              <label class="field-label">{{ t('settings.agentInstructions') }}</label>
-              <AgentInstructionsEditor />
-            </div>
-
-            <div class="field-divider" aria-hidden="true"></div>
             <div class="field-row">
               <div class="field-copy">
                 <label class="field-label">{{ t('settings.memoryAutoRecall') }}</label>
@@ -138,6 +132,19 @@
                 <label class="field-label">{{ t('settings.memoryAgentWrite') }}</label>
               </div>
               <n-switch v-model:value="memoryAgentWriteEnabled" />
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.memoryAutoExtract') }}</label>
+                <p class="field-description">{{ t('settings.memoryAutoExtractDescription') }}</p>
+              </div>
+              <n-switch v-model:value="memoryAutoExtractEnabled" />
+            </div>
+            <div class="field-block" v-if="memoryAutoExtractEnabled">
+              <label class="field-label">{{ t('settings.memoryExtractionInterval') }}</label>
+              <n-input-number v-model:value="memoryExtractionIntervalTurns" class="field-input" :min="1" :precision="0" />
             </div>
 
             <div class="field-divider" aria-hidden="true"></div>
@@ -482,7 +489,6 @@ import { useAppUpdateStore } from '@/stores/appUpdate'
 import { storageApi, type ConversationStorageUsage } from '@/api/storage'
 import ComboLogo from '@/components/brand/ComboLogo.vue'
 import ErrorReportButton from '@/components/common/ErrorReportButton.vue'
-import AgentInstructionsEditor from '@/components/common/AgentInstructionsEditor.vue'
 import { knowledgeApi, type KnowledgeRetrievalSettings } from '@/api/knowledge'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -669,6 +675,17 @@ const contextCompressionDetail = computed({
 const memoryAutoRecallEnabled = computed({
   get: () => runtimePreferences.memoryAutoRecallEnabled,
   set: (value: boolean) => runtimePreferences.setMemoryAutoRecallEnabled(value),
+})
+
+const memoryAutoExtractEnabled = computed({
+  get: () => runtimePreferences.memoryAutoExtractEnabled,
+  set: (value: boolean) => runtimePreferences.setMemoryAutoExtractEnabled(value),
+})
+const memoryExtractionIntervalTurns = computed({
+  get: () => runtimePreferences.memoryExtractionIntervalTurns,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setMemoryExtractionIntervalTurns(value)
+  },
 })
 const memoryAgentWriteEnabled = computed({
   get: () => runtimePreferences.memoryAgentWriteEnabled,

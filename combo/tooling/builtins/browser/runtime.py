@@ -4,7 +4,6 @@ import asyncio
 import ipaddress
 import json
 import logging
-import re
 import socket
 import threading
 import time
@@ -15,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from combo.sensitive_data import redact_sensitive_value
 from combo.tooling.execution_context import register_runtime_tool_cancellation
 from combo.tooling.targets import select_target
 
@@ -79,7 +79,6 @@ class BrowserRuntime:
         self._thread.start()
         self._playwright: Any | None = None
         self._browser: Any | None = None
-        self._browser_user_agent: str | None = None
         self._sessions: dict[str, BrowserSession] = {}
         self._view_streams: dict[tuple[str, str], dict[str, Any]] = {}
         self._view_subscriptions: dict[str, tuple[str, str]] = {}
@@ -338,7 +337,6 @@ class BrowserRuntime:
             try:
                 browser = await playwright.chromium.launch(**launch_options)
                 self._browser = browser
-                self._browser_user_agent = await self._resolve_browser_user_agent(browser)
             except Exception as exc:
                 await playwright.stop()
                 self._playwright = None
@@ -346,17 +344,6 @@ class BrowserRuntime:
                     "Chromium could not be started. Run 'python -m playwright install chromium' "
                     f"or configure COMBO_BROWSER_EXECUTABLE_PATH. Detail: {exc}"
                 ) from exc
-
-    async def _resolve_browser_user_agent(self, browser: Any) -> str:
-        cdp = await browser.new_browser_cdp_session()
-        try:
-            version = await cdp.send("Browser.getVersion")
-        finally:
-            await cdp.detach()
-        user_agent = str(version.get("userAgent") or "").strip()
-        if not user_agent:
-            raise RuntimeError("Chromium did not report a browser user agent")
-        return _reduced_chromium_user_agent(user_agent)
 
     async def _session(
         self,
@@ -385,7 +372,6 @@ class BrowserRuntime:
                 "width": self.config.viewport_width,
                 "height": self.config.viewport_height,
             },
-            user_agent=self._browser_user_agent,
             locale=resolved_locale,
             timezone_id=resolved_timezone,
         )
@@ -601,6 +587,35 @@ class BrowserRuntime:
 
         cdp.on("Fetch.requestPaused", on_request_paused)
 
+        def log_navigation(event: str, **details: Any) -> None:
+            LOGGER.info(
+                "browser_navigation %s",
+                json.dumps(
+                    redact_sensitive_value({
+                        "event": event,
+                        "view_id": session.view_id,
+                        "page_id": page_id,
+                        **details,
+                    }),
+                    ensure_ascii=False,
+                ),
+            )
+
+        def on_request(request: Any) -> None:
+            if not request.is_navigation_request() or request.frame != page.main_frame:
+                return
+            log_navigation(
+                "request",
+                url=request.url,
+                redirected_from=request.redirected_from.url if request.redirected_from else None,
+                locale=session.locale,
+                timezone_id=session.timezone_id,
+                headers={
+                    name: value for name, value in request.headers.items()
+                    if name in {"user-agent", "accept-language", "sec-ch-ua", "sec-ch-ua-platform", "sec-ch-ua-mobile"}
+                },
+            )
+
         def on_response(response: Any) -> None:
             request = response.request
             if not request.is_navigation_request() or response.frame != page.main_frame:
@@ -608,8 +623,24 @@ class BrowserRuntime:
             history = session.document_status_codes.setdefault(page_id, [])
             history.append(int(response.status))
             del history[:-8]
+            log_navigation(
+                "response",
+                url=response.url,
+                status=response.status,
+                headers={
+                    name: value for name, value in response.headers.items()
+                    if name in {"content-type", "location", "server", "date", "cache-control"}
+                },
+            )
 
+        def on_request_failed(request: Any) -> None:
+            if not request.is_navigation_request() or request.frame != page.main_frame:
+                return
+            log_navigation("failed", url=request.url, failure=request.failure)
+
+        page.on("request", on_request)
         page.on("response", on_response)
+        page.on("requestfailed", on_request_failed)
         await cdp.send(
             "Fetch.enable",
             {
@@ -1170,7 +1201,6 @@ class BrowserRuntime:
         if self._browser is not None:
             await self._browser.close()
             self._browser = None
-            self._browser_user_agent = None
         if self._playwright is not None:
             await self._playwright.stop()
             self._playwright = None
@@ -1256,15 +1286,3 @@ def _required_session_setting(value: str | None, name: str) -> str:
     if not normalized:
         raise ValueError(f"{name} is required before opening a browser session")
     return normalized
-
-
-def _reduced_chromium_user_agent(user_agent: str) -> str:
-    reduced, replacements = re.subn(
-        r"\b(?:HeadlessChrome|Chrome)/(\d+)(?:\.\d+){1,3}\b",
-        lambda match: f"Chrome/{match.group(1)}.0.0.0",
-        user_agent,
-        count=1,
-    )
-    if replacements != 1:
-        raise RuntimeError("Chromium reported an unsupported browser user agent")
-    return reduced

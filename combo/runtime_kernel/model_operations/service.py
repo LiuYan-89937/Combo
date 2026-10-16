@@ -28,6 +28,7 @@ from combo.models.content import content_to_text, strip_internal_snapshot_blocks
 from combo.models.chat_model import ChatModelSettings
 from combo.models.message_layout import system_messages_first
 from combo.models.reasoning import reasoning_content_from_message
+from combo.runtime_errors import runtime_failure_from_exception
 from combo.models.usage import usage_metadata_with_fallback
 from combo.runtime_kernel.model_inputs import (
     build_runtime_model_input,
@@ -251,7 +252,10 @@ class ModelOperationService:
                 input_injections=consume_runtime_inputs(),
             ) from exc
         except Exception as exc:
-            _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
+            _emit(emit_event, "model_call_failed", {
+                "operation": "tool_bound_chat", "stream_id": stream_id, "error": str(exc),
+                "failure": runtime_failure_from_exception(exc).model_dump(mode="json"),
+            })
             raise
         if isinstance(response, BaseMessage):
             response = response.model_copy(update={"id": stream_id})
@@ -419,6 +423,7 @@ class ModelOperationService:
                     "attempt": attempt,
                     "max_attempts": attempts,
                     "error": str(exc),
+                    "failure": runtime_failure_from_exception(exc).model_dump(mode="json"),
                     **operation_context,
                 },
             )
@@ -609,17 +614,21 @@ def _invoke_tool_bound_chat(
                 )
     except RuntimeModelGenerationInterrupted as exc:
         partial_text = ""
+        partial_reasoning_content = None
         partial_tool_calls: tuple[dict[str, Any], ...] = ()
         if chunks:
             partial_response = _merge_stream_chunks(chunks)
             partial_text = strip_internal_snapshot_blocks(
                 content_to_text(getattr(partial_response, "content", ""))
             )
+            partial_reasoning_content = reasoning_content_from_message(partial_response)
             partial_tool_calls = tuple(tool_calls_from_response(partial_response))
+        if partial_reasoning_content is None and reasoning_parts:
+            partial_reasoning_content = "".join(reasoning_parts)
         raise RuntimeModelGenerationInterrupted(
             str(exc),
             partial_text=partial_text,
-            reasoning_content="".join(reasoning_parts),
+            reasoning_content=partial_reasoning_content,
             partial_tool_calls=partial_tool_calls,
         ) from exc
     except NotImplementedError:
@@ -639,7 +648,7 @@ def _invoke_tool_bound_chat(
             revision=generation_revision,
         )
     response = _merge_stream_chunks(chunks)
-    if reasoning_parts and not reasoning_content_from_message(response):
+    if reasoning_parts and reasoning_content_from_message(response) is None:
         _attach_reasoning_content(response, "".join(reasoning_parts))
     return response
 
@@ -689,7 +698,7 @@ def _emit_model_message_completed(
             "tool_call_count": tool_call_count,
             "presentation": "activity" if tool_call_count else "answer",
             "discard": bool(tool_call_count),
-            **({"reasoning_content": reasoning_content} if reasoning_content else {}),
+            **({"reasoning_content": reasoning_content} if reasoning_content is not None else {}),
         },
     )
 

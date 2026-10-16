@@ -469,8 +469,9 @@ class ConversationLifecycleService:
         command_placeholders = _placeholders(plan.command_ids) if plan.command_ids else "null"
         with self._database.transaction() as conn:
             memory_rows = conn.execute(
-                f"select distinct memory_id from memory_revisions where source_session_id in ({session_placeholders})",
-                plan.session_ids,
+                f"select distinct memory_id from memory_revisions where source_session_id in ({session_placeholders}) "
+                f"or session_id in ({session_placeholders})",
+                (*plan.session_ids, *plan.session_ids),
             ).fetchall()
             memory_ids = tuple(str(row["memory_id"]) for row in memory_rows)
             _delete_memories(conn, memory_ids)

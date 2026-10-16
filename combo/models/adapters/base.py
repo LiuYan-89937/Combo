@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 from combo.models.capabilities import ProviderProfile
+from combo.models.errors import ModelConfigurationError
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
 
-class ProviderAdapterError(RuntimeError):
+class ProviderAdapterError(ModelConfigurationError):
     pass
 
 
@@ -65,8 +66,6 @@ class OpenAIChatCompletionsAdapter(OpenAICompatibleAdapter):
         extra_body = self.extra_body(settings)
         if extra_body:
             kwargs["extra_body"] = extra_body
-        if self._should_preserve_reasoning_content(settings):
-            kwargs["preserve_reasoning_content"] = True
         return _create_openai_compatible_chat_model(**kwargs)
 
     def extra_body(self, settings: Any) -> dict[str, Any]:
@@ -74,14 +73,6 @@ class OpenAIChatCompletionsAdapter(OpenAICompatibleAdapter):
 
     def request_parameters(self, settings: Any) -> dict[str, Any]:
         return {}
-
-    def _should_preserve_reasoning_content(self, settings: Any) -> bool:
-        reasoning = getattr(settings, "reasoning", None)
-        if getattr(reasoning, "enabled", None) is not True:
-            return False
-        if getattr(reasoning, "send_history", None) is False:
-            return False
-        return self.profile.capabilities.send_reasoning_history != "unsupported"
 
 
 class OpenAIResponsesAdapter(OpenAICompatibleAdapter):

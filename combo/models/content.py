@@ -38,6 +38,21 @@ def strip_internal_snapshot_blocks(value: str) -> str:
     return _INTERNAL_SESSION_SNAPSHOT_OPEN_RE.sub("", text)
 
 
+def assistant_history_content(content: str | list[str | dict[str, Any]]) -> str | list[str | dict[str, Any]]:
+    """Clean visible text while retaining native provider blocks for history replay."""
+    if isinstance(content, str):
+        return strip_internal_snapshot_blocks(content)
+    projected: list[str | dict[str, Any]] = []
+    for block in content:
+        if isinstance(block, str):
+            projected.append(strip_internal_snapshot_blocks(block))
+        elif block.get("type") in {"text", "output_text"}:
+            projected.append({**block, "text": strip_internal_snapshot_blocks(str(block.get("text") or ""))})
+        else:
+            projected.append(block)
+    return projected
+
+
 def _content_part_text(item: Any) -> str:
     if isinstance(item, str):
         return item

@@ -49,8 +49,10 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="read",
         description=(
-            "读取 workspace 边界内的指定文本文件内容，按行号返回可控范围。"
-            "offset 是从 1 开始的起始行号，limit 是最多返回的行数。"
+            "读取 workspace 边界内的文本文件或图片。文本按行返回；"
+            "offset 是从 1 开始的起始行号，limit 是最多返回的行数，两者仅用于文本。"
+            "图片只需提供 path；支持图片输入的模型会收到图片，纯文本模型只收到格式、尺寸等元数据，无法查看画面。"
+            "SVG 按文本源码读取；不提取 PDF 或 Office 文档内容。"
             f"{_READ_MISSING_GUIDANCE}"
         ),
         entrypoint="combo.tooling.builtins.filesystem.read:run",
@@ -58,24 +60,46 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _READ_PATH_DESCRIPTION},
-                "offset": {"type": "integer", "minimum": 1, "default": 1, "description": "起始行号，从 1 开始，默认 1；不是字节偏移量。"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "最多读取多少行。"},
+                "offset": {"type": "integer", "minimum": 1, "default": 1, "description": "仅文本：起始行号，从 1 开始，默认 1；不是字节偏移量。"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "仅文本：最多读取多少行。"},
             },
             "required": ["path"],
             "additionalProperties": False,
         },
         output_schema={
-            "type": "object",
-            "properties": {
-                "path": _STRING,
-                "content": _STRING,
-                "start_line": _INTEGER,
-                "end_line": _INTEGER,
-                "total_lines": _INTEGER,
-                "truncated": _BOOLEAN,
-            },
-            "required": ["path", "content", "start_line", "end_line", "total_lines", "truncated"],
-            "additionalProperties": False,
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _STRING,
+                        "content": _STRING,
+                        "start_line": _INTEGER,
+                        "end_line": _INTEGER,
+                        "total_lines": _INTEGER,
+                        "truncated": _BOOLEAN,
+                    },
+                    "required": ["path", "content", "start_line", "end_line", "total_lines", "truncated"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": _STRING,
+                        "mime_type": _STRING,
+                        "width": _INTEGER,
+                        "height": _INTEGER,
+                        "size_bytes": _INTEGER,
+                        "model_image": {
+                            "type": "object",
+                            "properties": {"path": _STRING, "mime_type": _STRING},
+                            "required": ["path", "mime_type"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["path", "mime_type", "width", "height", "size_bytes", "model_image"],
+                    "additionalProperties": False,
+                },
+            ],
         },
         resources=_FILESYSTEM_RESOURCE,
         effects=["read"],

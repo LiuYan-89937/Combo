@@ -48,9 +48,6 @@ class ModelPoolCapabilities(BaseModel):
     streaming_tool_calls: bool = False
     strict_tool_schema: bool = False
     structured_output_methods: list[StructuredOutputMethod] = Field(default_factory=lambda: ["json_mode"])
-    reasoning_supported: bool = False
-    reasoning_efforts: list[str] = Field(default_factory=list)
-    reasoning_content: bool = False
     cache_usage: bool = False
     text_to_image: bool = False
     image_to_image: bool = False
@@ -58,7 +55,7 @@ class ModelPoolCapabilities(BaseModel):
     multi_image_reference: bool = False
     batch_generation: bool = False
 
-    @field_validator("input_modalities", "output_modalities", "structured_output_methods", "reasoning_efforts")
+    @field_validator("input_modalities", "output_modalities", "structured_output_methods")
     @classmethod
     def _stable_non_empty_strings(cls, value: list[str]) -> list[str]:
         result: list[str] = []
@@ -519,9 +516,6 @@ def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind =
             streaming_tool_calls=False,
             strict_tool_schema=False,
             structured_output_methods=[],
-            reasoning_supported=False,
-            reasoning_efforts=[],
-            reasoning_content=False,
             cache_usage=False,
         )
     if kind == "image_generation":
@@ -533,9 +527,6 @@ def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind =
             streaming_tool_calls=False,
             strict_tool_schema=False,
             structured_output_methods=[],
-            reasoning_supported=False,
-            reasoning_efforts=[],
-            reasoning_content=False,
             cache_usage=False,
             text_to_image=capabilities.get("text_to_image", False),
             image_to_image=capabilities.get("image_to_image", False),
@@ -557,9 +548,6 @@ def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind =
         streaming_tool_calls=capabilities.streaming_tool_calls != "unsupported",
         strict_tool_schema=capabilities.strict_tool_schema != "unsupported",
         structured_output_methods=list(capabilities.structured_output_methods),
-        reasoning_supported=capabilities.reasoning != "unsupported",
-        reasoning_efforts=list(capabilities.reasoning_efforts),
-        reasoning_content=capabilities.reasoning_content != "unsupported",
         cache_usage=capabilities.cache_usage != "unsupported",
     )
 

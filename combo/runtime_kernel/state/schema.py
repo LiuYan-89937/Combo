@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from combo.runtime_kernel.constants import RUNTIME_KERNEL_VERSION, RUNTIME_STATE_SCHEMA_VERSION
 from combo.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
+from combo.runtime_protocol.errors import RuntimeFailure
 
 
 class RunState(BaseModel):
@@ -159,6 +160,7 @@ class ExecutionState(BaseModel):
     finish_status: str | None = None
     last_error: str | None = None
     last_error_location: str | None = None
+    failure: RuntimeFailure | None = None
 
 
 class RuntimeConfigState(BaseModel):

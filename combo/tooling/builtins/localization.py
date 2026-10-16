@@ -16,7 +16,7 @@ class BuiltinToolLocalization:
 
 BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
     'read': BuiltinToolLocalization(
-        description_en_us='Read a bounded line range from a UTF-8 text file in the current workspace. offset is the 1-based starting line (default 1), not a byte offset; limit is the maximum number of lines (default 200, maximum 2000). If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.',
+        description_en_us='Read a UTF-8 text file or an image in the current workspace. For text, offset is the 1-based starting line (default 1), not a byte offset; limit is the maximum number of lines (default 200, maximum 2000). For images, provide path only: vision-capable models receive the image, while text-only models receive format and dimension metadata and cannot inspect its visual contents. SVG is read as source text; PDF and Office documents are not extracted. If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.',
     ),
     'write': BuiltinToolLocalization(
         description_en_us='Create or fully replace a text file in the current workspace. Use write_once with path and complete content; for staged generation use start, append, then commit with the same file path, or abort to discard it. Every action requires path; the executor binds the staged transaction to the normalized path within this workspace. Only one staged transaction per path may be active. Use edit for local changes.',

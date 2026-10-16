@@ -34,6 +34,7 @@ from combo.context_system.token_counter import (
     model_context_limits as resolve_model_context_limits,
 )
 from combo.context_system.token_estimation import estimate_messages_tokens
+from combo.runtime_errors import RuntimeFailureError
 
 
 class ContextPreparationResult(BaseModel):
@@ -186,7 +187,9 @@ class ContextSystemRuntime:
                 ),
             )
         if compression_report.status == "failed":
-            raise RuntimeError(compression_report.error or "context compression failed")
+            if compression_report.failure is None:
+                raise RuntimeError("failed context compression report has no failure details")
+            raise RuntimeFailureError(compression_report.failure)
         messages_changed = compression_messages != working_messages
         working_messages = compression_messages
         return self._prepare_memory(

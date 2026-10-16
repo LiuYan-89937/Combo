@@ -6,6 +6,8 @@ from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from combo.model_image_inputs import tool_image_parts
+from combo.models.content import content_to_text
 from combo.runtime_protocol import (
     ArtifactPart,
     CapabilitySnapshot,
@@ -17,6 +19,7 @@ from combo.runtime_protocol import (
     ToolResultPart,
 )
 from combo.runtime_kernel.planning import RUNTIME_PLAN_TOOL_ID
+from combo.models.reasoning import reasoning_blocks_from_message, reasoning_content_from_message
 
 
 ToolResultStatus = Literal["completed", "failed", "cancelled", "rejected", "timed_out"]
@@ -47,34 +50,45 @@ def conversation_to_graph_messages(messages: list[ConversationMessage]) -> list[
                 for part in message.parts
                 if isinstance(part, ToolCallPart)
             ]
-            if text or tool_calls:
+            reasoning_parts = [part for part in message.parts if isinstance(part, ReasoningPart)]
+            reasoning_texts = [part.text for part in reasoning_parts if part.text is not None]
+            reasoning = "".join(reasoning_texts) if reasoning_texts else None
+            reasoning_blocks = [
+                block for part in reasoning_parts
+                for block in part.provider_blocks
+            ]
+            metadata: dict[str, Any] = {}
+            if message.completion_reason:
+                metadata["completion_reason"] = message.completion_reason
+            if reasoning is not None:
+                metadata["reasoning_content"] = reasoning
+            if text or tool_calls or reasoning_parts:
                 projected.append(
                     AIMessage(
-                        content=text,
+                        content=[*reasoning_blocks, *([{"type": "text", "text": text}] if text else [])]
+                        if reasoning_blocks else text,
                         id=message.message_id,
                         tool_calls=tool_calls,
-                        additional_kwargs=(
-                            {"completion_reason": message.completion_reason}
-                            if message.completion_reason
-                            else {}
-                        ),
+                        additional_kwargs=metadata,
                     )
                 )
             continue
         for part in message.parts:
             if not isinstance(part, ToolResultPart):
                 continue
+            text = json.dumps(
+                {
+                    "status": part.status,
+                    "output": part.output,
+                    "error_code": part.error_code,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             projected.append(
                 ToolMessage(
-                    content=json.dumps(
-                        {
-                            "status": part.status,
-                            "output": part.output,
-                            "error_code": part.error_code,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
+                    content=[{"type": "text", "text": text}, *part.image_parts]
+                    if part.image_parts else text,
                     tool_call_id=part.tool_call_id,
                     id=f"{message.message_id}:{part.tool_call_id}",
                 )
@@ -112,9 +126,10 @@ def graph_messages_to_conversation(
             content = _message_text(message)
             if content:
                 parts.append(TextPart(text=content))
-            reasoning_content = _message_reasoning(message)
-            if reasoning_content:
-                parts.append(ReasoningPart(text=reasoning_content))
+            reasoning_content = reasoning_content_from_message(message)
+            reasoning_blocks = reasoning_blocks_from_message(message)
+            if reasoning_content is not None or reasoning_blocks:
+                parts.append(ReasoningPart(text=reasoning_content, provider_blocks=tuple(reasoning_blocks)))
             for call in list(message.tool_calls or []):
                 alias = str(call.get("name") or "").strip()
                 tool_call_id = str(call.get("id") or "").strip()
@@ -234,8 +249,6 @@ def _text_content(message: ConversationMessage) -> str:
             chunks.append(f"[artifact:{part.artifact_id}@{part.revision}]")
         elif isinstance(part, DiagnosticPart):
             chunks.append(f"[diagnostic:{part.user_message_key}]")
-        # ReasoningPart is intentionally persisted for UI recovery but never
-        # projected back into the provider conversation.
     return "\n".join(chunks)
 
 
@@ -256,6 +269,7 @@ def _message_text(message: BaseMessage) -> str:
 
 def _tool_result_part(message: ToolMessage) -> ToolResultPart:
     payload = _json_object_or_text(message.content)
+    images = tuple(tool_image_parts(message))
     raw_status = str(payload.get("status") or payload.get("execution_status") or "completed").strip()
     statuses: dict[str, ToolResultStatus] = {
         "completed": "completed",
@@ -275,19 +289,17 @@ def _tool_result_part(message: ToolMessage) -> ToolResultPart:
             tool_call_id=message.tool_call_id,
             status="completed",
             output=_json_object(output if output is not None else payload),
+            image_parts=images,
             **_tool_message_timing(message),
         )
     return ToolResultPart(
         tool_call_id=message.tool_call_id,
         status=status,
         output=_failed_tool_output(payload),
+        image_parts=images,
         error_code=str(payload.get("error_code") or raw_status or "tool_failed"),
         **_tool_message_timing(message),
     )
-
-
-def _message_reasoning(message: BaseMessage) -> str:
-    return str(getattr(message, "additional_kwargs", {}).get("reasoning_content") or "").strip()
 
 
 def _tool_message_timing(message: ToolMessage) -> _ToolMessageTiming:
@@ -331,7 +343,7 @@ def _json_object(value: Any) -> dict[str, Any]:
 def _json_object_or_text(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return _json_object(value)
-    text = str(value or "")
+    text = content_to_text(value)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:

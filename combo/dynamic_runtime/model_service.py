@@ -10,6 +10,7 @@ from combo.models.chat_model import ChatModelSettings
 from combo.models.chat_model import create_chat_model_from_settings
 from combo.models.protocol import ModelReasoningSettings
 from combo.models.reasoning import apply_reasoning_intensity
+from combo.models.errors import ModelConfigurationError
 from combo.runtime_kernel.model_operations import RuntimeModelHandle, RuntimeModelHandleRegistry
 from combo.runtime_protocol import (
     ApprovalMode,
@@ -22,7 +23,7 @@ from combo.runtime_protocol import (
 )
 
 
-class RuntimeModelResolutionError(RuntimeError):
+class RuntimeModelResolutionError(ModelConfigurationError):
     pass
 
 
@@ -59,6 +60,12 @@ class RuntimeModelResolver:
         if resolved.snapshot != frozen:
             raise RuntimeError("resolved model does not match the runtime policy snapshot")
         return resolved
+
+    def resolve_task_model(self, *, operation: ModelOperationKind, session_id: str) -> ResolvedRuntimeChatModel:
+        profile_id = self._store.task_model_binding()
+        if not profile_id:
+            raise RuntimeModelResolutionError("task_model_not_configured")
+        return self.resolve_chat_model(operation=operation, profile_id=profile_id, session_id=session_id)
 
     def resolve_compression_for_policy(
         self,
@@ -225,6 +232,8 @@ class RuntimeModelResolver:
             context_compression_keep_recent_messages=policy.context_compression_keep_recent_messages,
             memory_auto_recall_enabled=policy.memory_auto_recall_enabled,
             memory_agent_write_enabled=policy.memory_agent_write_enabled,
+            memory_auto_extract_enabled=policy.memory_auto_extract_enabled,
+            memory_extraction_interval_turns=policy.memory_extraction_interval_turns,
             memory_max_injected_items=policy.memory_max_injected_items,
             memory_max_injected_tokens=policy.memory_max_injected_tokens,
             computer_use_enabled=policy.computer_use_enabled,

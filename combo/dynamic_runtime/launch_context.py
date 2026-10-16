@@ -233,7 +233,6 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             principal_id=principal_id,
             references=resolved,
             workspace=workspace,
-            runtime_instance_id=runtime_instance_id,
         )
 
     def resolve(
@@ -262,7 +261,6 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             principal_id=request.principal_id,
             references=attachment_refs,
             workspace=workspace,
-            runtime_instance_id=instance.runtime_instance_id,
         )
         if request.runtime_role == "temporary":
             delegated_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
@@ -279,8 +277,14 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
                 event_ids=notification_event_ids,
             )
         capability_instructions = self._capability_instructions.render(capability_snapshot, locale=locale)
-        agent_text = self._agent_instructions.read()["content"].strip() if request.runtime_role == "main" else ""
-        system_prompt = f"{base_prompt}\n\n# Agent.md\n{agent_text}" if agent_text else base_prompt
+        agent_text = self._agent_instructions.runtime_text(
+            principal_id=request.principal_id, workspace_id=request.workspace_id,
+        ).strip() if request.runtime_role == "main" else ""
+        system_prompt = (
+            f"{base_prompt}\n\n# Workspace Agent.md\n"
+            "The following user-managed workspace instructions supplement the application's base system rules.\n"
+            f"{agent_text}"
+        ) if agent_text else base_prompt
         turn_directives = _turn_directives(
             delegated=delegated_directives,
             force_collaboration=request.runtime_role == "main" and request.force_collaboration,
@@ -331,7 +335,6 @@ def _resolve_runtime_attachments(
     principal_id: str,
     references: tuple[AttachmentRevisionRef, ...],
     workspace: WorkspaceLaunchProjection,
-    runtime_instance_id: str,
 ) -> tuple[dict[str, Any], ...]:
     if not references:
         return ()
@@ -339,15 +342,13 @@ def _resolve_runtime_attachments(
         resolver.resolve(principal_id=principal_id, reference=reference)
         for reference in references
     ]
-    scope = str(runtime_instance_id or "").strip()
-    if not scope:
-        raise ValueError("runtime attachment scope requires runtime_instance_id")
+    root = workspace_attachment_root(Path(workspace.root_path))
     imported = import_runtime_attachments(
         "",
         attachment_inputs,
-        storage_root=workspace_attachment_root(Path(workspace.root_path)) / scope,
-        runtime_path_root=workspace_attachment_runtime_root(workspace.root_alias, scope),
-        scope=scope,
+        storage_root=root,
+        runtime_path_root=workspace_attachment_runtime_root(workspace.root_alias, ""),
+        scope="",
     )
     return tuple(dict(item) for item in imported.attachments)
 

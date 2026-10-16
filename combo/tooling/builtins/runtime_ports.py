@@ -10,6 +10,7 @@ from combo.runtime_protocol.delegation_requests import (
 )
 from combo.runtime_protocol.knowledge import KnowledgeDocumentRecord
 from combo.runtime_protocol.memory import MemoryKind, MemoryRevision, MemoryScope
+from combo.runtime_protocol.memory_operations import MemoryChangeSet
 
 
 @runtime_checkable
@@ -103,14 +104,21 @@ class SchedulerRuntimePort(Protocol):
 class MemoryRuntimePort(Protocol):
     def search(
         self, *, principal_id: str, workspace_id: str, session_id: str, query: str, limit: int,
-        min_relevance: float = 0.0,
+        min_relevance: float = 0.0, scope: MemoryScope | None = None,
+        kind: MemoryKind | None = None,
     ) -> tuple[MemorySearchResult, ...]: ...
 
-    def write(
-        self, *, principal_id: str, scope: MemoryScope, workspace_id: str, session_id: str,
-        kind: MemoryKind, content: str, confidence: float,
-        source_session_id: str, source_turn_id: str, runtime_instance_id: str,
-    ) -> MemoryRevision: ...
+    def list_active(
+        self, *, principal_id: str, workspace_id: str, session_id: str | None,
+        scope: MemoryScope | None = None, kind: MemoryKind | None = None,
+        limit: int | None = 100, offset: int = 0,
+    ) -> tuple[MemoryRevision, ...]: ...
+
+    def apply_changes(
+        self, *, principal_id: str, workspace_id: str, session_id: str | None,
+        changes: MemoryChangeSet, source_session_id: str | None = None,
+        source_turn_id: str | None = None, runtime_instance_id: str | None = None,
+    ) -> tuple[MemoryRevision, ...]: ...
 
 
 @runtime_checkable

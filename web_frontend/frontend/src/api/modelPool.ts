@@ -65,9 +65,6 @@ export interface ModelPoolProfile {
     streaming_tool_calls: boolean
     strict_tool_schema: boolean
     structured_output_methods: string[]
-    reasoning_supported: boolean
-    reasoning_efforts: string[]
-    reasoning_content: boolean
     cache_usage: boolean
     text_to_image?: boolean
     image_to_image?: boolean

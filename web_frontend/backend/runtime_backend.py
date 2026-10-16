@@ -164,7 +164,7 @@ class RuntimeBackendConfig:
     builtin_capability_source_prefix: str
     builtin_tool_overrides_path: Path
     main_agent_capability_profile_path: Path
-    main_agent_instructions_path: Path
+    legacy_agent_instructions_path: Path
     skill_capability_source_prefix: str
     capability_blob_root: Path
     capability_source_cache_root: Path
@@ -214,7 +214,7 @@ class RuntimeBackendConfig:
             main_agent_capability_profile_path=combo_data_path(
                 "extension_registry", "main_agent_capability_profile.json"
             ),
-            main_agent_instructions_path=combo_data_path("extension_registry", "main_chat", "Agent.md"),
+            legacy_agent_instructions_path=combo_data_path("extension_registry", "main_chat", "Agent.md"),
             skill_capability_source_prefix="filesystem-skill://",
             capability_blob_root=combo_data_path("capability_blobs"),
             capability_source_cache_root=combo_data_path("capability_blobs", "source_cache"),
@@ -323,7 +323,7 @@ class RuntimeBackend:
         self._tool_package_lock = RLock()
         self._skill_package_lock = RLock()
         self._main_agent_profile_lock = RLock()
-        self.agent_instructions = AgentInstructionStore(config.main_agent_instructions_path)
+        self.agent_instructions = AgentInstructionStore(DynamicRuntimeDatabase(config.database_path), legacy_path=config.legacy_agent_instructions_path)
         self._remove_main_agent_profile_capabilities(TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS)
         self.resource_store = ResourceStore(config.resource_store_path)
         self.tool_context = ToolContextResources(self.resource_store)
@@ -555,11 +555,13 @@ class RuntimeBackend:
     def capability_pool_snapshot(self) -> dict[str, object]:
         return self.capability_pool_view.snapshot()
 
-    def read_agent_instructions(self) -> dict[str, str]:
-        return self.agent_instructions.read()
+    def read_agent_instructions(self, *, principal_id: str, workspace_id: str) -> dict[str, object]:
+        return self.agent_instructions.read(principal_id=principal_id, workspace_id=workspace_id)
 
-    def replace_agent_instructions(self, *, content: str, expected_digest: str) -> dict[str, str]:
-        return self.agent_instructions.replace(content=content, expected_digest=expected_digest)
+    def replace_agent_instructions(self, *, principal_id: str, workspace_id: str,
+                                   content: str, expected_digest: str) -> dict[str, object]:
+        return self.agent_instructions.replace(principal_id=principal_id, workspace_id=workspace_id,
+                                               content=content, expected_digest=expected_digest)
 
     def main_agent_capability_profile(self) -> dict[str, object]:
         return self._main_agent_capability_profile_view(

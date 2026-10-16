@@ -374,7 +374,6 @@
               <n-checkbox v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
               <n-checkbox v-model:checked="profileForm.image_input">{{ t('modelPool.imageInput') }}</n-checkbox>
               <n-checkbox v-model:checked="profileForm.image_output">{{ t('modelPool.imageOutput') }}</n-checkbox>
-              <n-checkbox v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
             </n-space>
           </n-form-item>
           <n-form-item v-else-if="profileForm.kind === 'image_generation'" :label="t('modelPool.imageCapabilities')" class="model-capability-field">
@@ -594,7 +593,6 @@ const profileForm = reactive({
   embedding_dimensions: null as number | null,
   embedding_batch_size: null as number | null,
   tool_calling: true,
-  reasoning_supported: false,
   image_input: false,
   image_output: false,
   text_to_image: true,
@@ -944,7 +942,6 @@ function openProfile(item?: ModelPoolProfile): void {
     ?? modelDefaults.value?.embedding_batch_size
     ?? null
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
-  profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.image_input = item?.capabilities.input_modalities.includes('image') ?? false
   profileForm.image_output = item?.capabilities.output_modalities.includes('image') ?? false
   profileForm.text_to_image = item?.capabilities.text_to_image ?? true
@@ -1007,9 +1004,6 @@ async function saveProfile(): Promise<void> {
         structured_output_methods: isImageModel || isEmbeddingModel
           ? []
           : providerStructuredOutputMethods(credential.provider),
-        reasoning_supported: !isImageModel && !isEmbeddingModel && profileForm.reasoning_supported,
-        reasoning_efforts: [],
-        reasoning_content: !isImageModel && !isEmbeddingModel && profileForm.reasoning_supported,
         cache_usage: false,
         text_to_image: isImageModel && profileForm.text_to_image,
         image_to_image: isImageModel && profileForm.image_to_image,
@@ -1220,7 +1214,6 @@ function capabilityTags(profile: ModelPoolProfile): string[] {
   if (profile.capabilities.tool_calling) tags.push(t('modelPool.toolsTag'))
   if (profile.capabilities.input_modalities.includes('image')) tags.push(t('modelPool.imageInput'))
   if (profile.capabilities.output_modalities.includes('image')) tags.push(t('modelPool.imageOutput'))
-  if (profile.capabilities.reasoning_supported) tags.push(t('modelPool.reasoning'))
   return tags
 }
 

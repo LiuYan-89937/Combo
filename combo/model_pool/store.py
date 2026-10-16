@@ -35,6 +35,7 @@ MODEL_POOL_SCHEMA_MIGRATIONS = (
     "2026-08-13.consolidate-provider-protocols",
     "2026-08-19.split-openai-chat-and-responses",
     "2026-09-07.remove-anthropic-provider",
+    "2026-10-13.remove-model-reasoning-controls",
 )
 INFRASTRUCTURE_MODEL_ROLE_KINDS = {
     "task": "chat",
@@ -761,11 +762,28 @@ class ModelPoolStore:
                 ModelPoolStore._split_openai_chat_and_responses(conn)
             elif migration_id == "2026-09-07.remove-anthropic-provider":
                 ModelPoolStore._remove_anthropic_provider_data(conn)
+            elif migration_id == "2026-10-13.remove-model-reasoning-controls":
+                ModelPoolStore._remove_reasoning_controls(conn)
             else:
                 raise RuntimeError(f"unknown model pool schema migration: {migration_id}")
             conn.execute(
                 "insert into model_pool_schema_migrations(migration_id, applied_at) values (?, ?)",
                 (migration_id, utc_now_text()),
+            )
+
+    @staticmethod
+    def _remove_reasoning_controls(conn: sqlite3.Connection) -> None:
+        for table in ("model_pool_profiles", "model_profile_revisions"):
+            conn.execute(
+                f"""
+                update {table}
+                   set payload_json = json_remove(
+                     payload_json,
+                     '$.capabilities.reasoning_supported',
+                     '$.capabilities.reasoning_efforts',
+                     '$.capabilities.reasoning_content'
+                   )
+                """
             )
 
     @staticmethod

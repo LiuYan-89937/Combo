@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any, TypeGuard
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from combo.runtime_attachments import image_attachment_content_parts
+from combo.model_image_inputs import is_image_content_block, tool_image_parts
 
 
 def message_text(message: BaseMessage) -> str:
@@ -26,23 +26,6 @@ def message_text(message: BaseMessage) -> str:
     return str(content)
 
 
-def is_image_content_block(block: Any) -> TypeGuard[dict[str, Any]]:
-    if not isinstance(block, dict):
-        return False
-    block_type = str(block.get("type") or "").strip()
-    if block_type in {"image", "image_url", "input_image"}:
-        return True
-    source = block.get("source")
-    return isinstance(source, dict) and str(source.get("media_type") or "").startswith("image/")
-
-
-def message_image_parts(message: BaseMessage) -> list[dict[str, Any]]:
-    content = message.content
-    if not isinstance(content, list):
-        return []
-    return [item for item in content if is_image_content_block(item)]
-
-
 def copy_human_message_with_content(
     message: HumanMessage,
     content: str | list[str | dict[str, Any]],
@@ -53,19 +36,28 @@ def copy_human_message_with_content(
 def project_model_message_content(
     messages: Sequence[BaseMessage], *, image_input_enabled: bool,
 ) -> list[BaseMessage]:
-    """Keep tool replies textual and place live tool images after the full reply group."""
+    """Keep image-message identities and boundaries stable after each tool reply group."""
     latest_ai_index = max(
         (index for index, message in enumerate(messages) if isinstance(message, AIMessage)),
         default=-1,
     )
     projected: list[BaseMessage] = []
     pending_tool_images: list[dict[str, Any]] = []
+    image_tool_call_ids: list[str] = []
 
     def finish_tool_replies() -> None:
-        if pending_tool_images:
-            blocks: list[str | dict[str, Any]] = list(pending_tool_images)
-            projected.append(HumanMessage(content=blocks))
+        if image_tool_call_ids:
+            # Keep the same user boundary after image bytes become historical or
+            # the selected model changes its image-input capability.
+            text = "Tool images: " + ", ".join(image_tool_call_ids)
+            blocks: list[str | dict[str, Any]] = [
+                {"type": "text", "text": text}, *pending_tool_images,
+            ]
+            projected.append(
+                HumanMessage(id=f"tool-images:{image_tool_call_ids[0]}", content=blocks)
+            )
             pending_tool_images.clear()
+            image_tool_call_ids.clear()
 
     for index, message in enumerate(messages):
         if not isinstance(message, ToolMessage):
@@ -73,9 +65,11 @@ def project_model_message_content(
             projected.append(_without_historical_images(message))
             continue
 
-        if image_input_enabled and index > latest_ai_index:
-            inline_images = message_image_parts(message)
-            pending_tool_images.extend(inline_images or _tool_metadata_image_parts(message))
+        images = tool_image_parts(message)
+        if images:
+            image_tool_call_ids.append(message.tool_call_id)
+            if image_input_enabled and index > latest_ai_index:
+                pending_tool_images.extend(images)
         projected.append(message.model_copy(update={"content": _tool_text_content(message.content)}))
 
     finish_tool_replies()
@@ -114,14 +108,3 @@ def _tool_text_content(content: Any) -> str:
         else:
             text_parts.append(json.dumps(block, ensure_ascii=False, default=str))
     return "\n".join(text_parts)
-
-
-def _tool_metadata_image_parts(message: ToolMessage) -> list[dict[str, Any]]:
-    metadata = dict(message.additional_kwargs or {}).get("combo_tool_image")
-    if not isinstance(metadata, dict):
-        return []
-    path = str(metadata.get("path") or "").strip()
-    mime_type = str(metadata.get("mime_type") or "").strip()
-    if not path or not mime_type.startswith("image/"):
-        raise ValueError("tool image metadata requires an image path and MIME type")
-    return image_attachment_content_parts([{"path": path, "mime_type": mime_type}])

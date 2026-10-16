@@ -6,45 +6,27 @@ from combo.context_system.assembly import assemble_context_frame
 from combo.context_system.memory_context import MEMORY_CONTEXT_KEY, MEMORY_CONTEXT_VERSION
 from combo.context_system.schema import ContextPolicy, ContextQuery, CrossSessionMemoryPolicy
 from combo.context_system.sources import memory_candidate
-from combo.runtime_protocol import MemoryKind, MemoryScope, RuntimeExecutionIdentity
+from combo.runtime_protocol import RuntimeExecutionIdentity
+from combo.runtime_protocol.memory_operations import MemoryChangeSet, MemorySelector, memory_target
 from combo.tooling.builtins.runtime_ports import MemoryRuntimePort
-from combo.tooling.builtins.memory.specs import (
-    MEMORY_STORE_RESOURCE,
-    RUNTIME_IDENTITY_RESOURCE,
-)
+from combo.tooling.builtins.memory.specs import MEMORY_STORE_RESOURCE, RUNTIME_IDENTITY_RESOURCE
 from combo.tooling.envelope import tool_envelope
+from combo.tooling.targets import select_target
+
+
+READ_ACTIONS = frozenset({"search", "list", "read"})
+MUTATION_ACTIONS = frozenset({"write", "update", "merge", "delete"})
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    action = str(arguments.get("action") or "").strip()
-    if action == "search":
-        return {"action": "allow", "risk_level": "low", "reasons": ["read-only scoped memory search"]}
-    resources = context.get("resources")
-    identity = resources.get(RUNTIME_IDENTITY_RESOURCE) if isinstance(resources, dict) else None
-    runtime_role = identity.get("runtime_role") if isinstance(identity, dict) else None
-    if action == "write" and runtime_role == "temporary":
-        return {
-            "action": "deny",
-            "risk_level": "high",
-            "reasons": ["temporary runtimes cannot mutate long-term memory"],
-        }
-    if action == "write" and isinstance(identity, dict) and not identity.get("memory_agent_write_enabled", True):
-        return {
-            "action": "deny",
-            "risk_level": "medium",
-            "reasons": ["proactive memory writes are disabled in runtime preferences"],
-        }
-    if action == "write":
-        return {
-            "action": "ask",
-            "risk_level": "medium",
-            "reasons": ["operation persists cross-session memory"],
-        }
-    return {
-        "action": "deny",
-        "risk_level": "high",
-        "reasons": ["unknown memory operation"],
-    }
+    action = arguments.get("action")
+    if action in READ_ACTIONS:
+        return {"action": "allow", "risk_level": "low", "reasons": ["read-only scoped memory operation"]}
+    resources = context.get("resources") or {}
+    identity = resources.get(RUNTIME_IDENTITY_RESOURCE) or {}
+    if action in MUTATION_ACTIONS and identity.get("runtime_role") == "main" and identity.get("memory_agent_write_enabled", True):
+        return {"action": "allow", "risk_level": "medium", "reasons": ["enabled scoped memory management"]}
+    return {"action": "deny", "risk_level": "medium", "reasons": ["memory mutation is unavailable in this runtime"]}
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -54,71 +36,48 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("memory store is not configured")
     if not isinstance(identity, RuntimeExecutionIdentity):
         raise RuntimeError("memory tool requires an owned runtime execution identity")
-    action = str(arguments.get("action") or "").strip()
+    action = arguments["action"]
+    owner = dict(principal_id=identity.principal_id, workspace_id=identity.workspace_id,
+                 session_id=identity.session_id)
+    policy = CrossSessionMemoryPolicy.model_validate(identity.memory_policy)
     if action == "search":
-        query_text = _required_text(arguments, "query")
-        policy = CrossSessionMemoryPolicy.model_validate(identity.memory_policy)
-        query = ContextQuery(node_id="memory.search",
-                             components={"explicit_query": query_text}, limit=policy.max_candidates,
-                             min_relevance=policy.min_relevance)
+        query = ContextQuery(node_id="memory.search", components={"explicit_query": arguments["query"]},
+                             limit=policy.max_candidates, min_relevance=policy.min_relevance)
         candidates = [memory_candidate(item, origin="explicit") for item in store.search(
-            principal_id=identity.principal_id, workspace_id=identity.workspace_id,
-            session_id=identity.session_id,
-            query=query_text, limit=policy.max_candidates, min_relevance=policy.min_relevance,
+            **owner, query=arguments["query"], limit=policy.max_candidates, min_relevance=policy.min_relevance,
+            scope=arguments.get("scope"), kind=arguments.get("kind"),
         )]
-        frame = assemble_context_frame(
-            node_id=query.node_id, query=query, candidates=candidates,
-            policy=ContextPolicy(cross_session_memory=policy).assembly_policy(),
-        )
+        frame = assemble_context_frame(node_id=query.node_id, query=query, candidates=candidates,
+                                       policy=ContextPolicy(cross_session_memory=policy).assembly_policy())
         output = {
-            "action": action, "query": query_text,
+            "action": action, "query": arguments["query"],
             MEMORY_CONTEXT_KEY: {"version": MEMORY_CONTEXT_VERSION,
                                  "runtime_instance_id": identity.runtime_instance_id,
                                  "items": [item.model_dump(mode="json") for item in frame.items]},
             "selection": frame.decisions,
         }
-    elif action == "write":
-        _require_main(identity)
-        if not identity.memory_agent_write_enabled:
-            raise PermissionError("proactive memory writes are disabled in runtime preferences")
-        scope = _memory_scope(arguments.get("scope"))
-        revision = store.write(
-            principal_id=identity.principal_id,
-            scope=scope,
-            workspace_id=identity.workspace_id,
-            session_id=identity.session_id,
-            kind=_memory_kind(arguments.get("kind")),
-            content=_required_text(arguments, "content"),
-            confidence=float(arguments.get("confidence", 1)),
-            source_session_id=identity.session_id,
-            source_turn_id=identity.turn_id,
-            runtime_instance_id=identity.runtime_instance_id,
-        )
-        output = {"action": action, "memory": revision.model_dump(mode="json")}
+    elif action == "list":
+        offset = arguments.get("offset", 0)
+        items = store.list_active(**owner, scope=arguments.get("scope"), kind=arguments.get("kind"),
+                                  offset=offset, limit=policy.max_candidates + 1)
+        output = {"action": action, "memories": [memory_target(item) for item in items[:policy.max_candidates]],
+                  "next_offset": offset + policy.max_candidates if len(items) > policy.max_candidates else None}
+    elif action == "read":
+        selector = MemorySelector.model_validate(arguments["memory"])
+        selected = select_target(store.list_active(**owner, limit=None),
+                                 selector=selector.model_dump(exclude_none=True),
+                                 describe=memory_target, kind="memory")
+        output = {"action": action, "memory": memory_target(selected)}
+    elif action in MUTATION_ACTIONS:
+        if identity.runtime_role != "main" or not identity.memory_agent_write_enabled:
+            raise PermissionError("memory mutation is unavailable in this runtime")
+        changes = MemoryChangeSet.model_validate({"operations": [arguments]})
+        revisions = store.apply_changes(**owner, changes=changes, source_session_id=identity.session_id,
+                                        source_turn_id=identity.turn_id,
+                                        runtime_instance_id=identity.runtime_instance_id)
+        output = {"action": action, "memories": [
+            {**memory_target(item), "status": item.status} for item in revisions
+        ]}
     else:
-        raise ValueError("memory action must be search or write")
+        raise ValueError("unsupported memory action")
     return tool_envelope(output, summary=f"memory {action} completed")
-
-
-def _require_main(identity: RuntimeExecutionIdentity) -> None:
-    if identity.runtime_role != "main":
-        raise PermissionError("temporary runtimes cannot mutate long-term memory")
-
-
-def _required_text(arguments: dict[str, Any], name: str) -> str:
-    value = str(arguments.get(name) or "").strip()
-    if not value:
-        raise ValueError(f"{name} must not be empty")
-    return value
-
-
-def _memory_scope(value: Any) -> MemoryScope:
-    if value not in {"workspace", "session"}:
-        raise ValueError("memory scope must be workspace or session")
-    return value
-
-
-def _memory_kind(value: Any) -> MemoryKind:
-    if value not in {"constraint", "preference", "decision", "fact", "artifact"}:
-        raise ValueError("unsupported memory kind")
-    return value

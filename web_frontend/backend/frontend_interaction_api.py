@@ -17,6 +17,8 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from combo.agent_worktree import AgentWorktreeManager, WorktreeError, worktree_label
 from combo.dynamic_runtime.repositories import utc_now_text
+from combo.runtime_defaults import DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS
+from combo.runtime_protocol.memory_operations import MemoryDraft
 from combo.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
 from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.model_pool import ModelPoolStore
@@ -60,6 +62,7 @@ class AgentInstructionsWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str
     expected_digest: str
+    workspace_id: str
 
 
 class FrontendCommandRequest(BaseModel):
@@ -101,6 +104,8 @@ class RuntimePreferencesWrite(BaseModel):
     context_compression_keep_recent_messages: int | None = Field(default=None, ge=0, le=128)
     memory_auto_recall_enabled: bool | None = None
     memory_agent_write_enabled: bool | None = None
+    memory_auto_extract_enabled: bool | None = None
+    memory_extraction_interval_turns: int | None = Field(default=None, ge=1)
     memory_max_injected_items: int | None = Field(default=None, ge=1, le=64)
     memory_max_injected_tokens: int | None = Field(default=None, ge=100, le=32000)
     computer_use_enabled: bool | None = None
@@ -111,6 +116,26 @@ class MemoryDeleteRequest(BaseModel):
     memory_id: str
     workspace_id: str
     session_id: str | None = None
+
+
+class MemoryCreateRequest(MemoryDraft):
+    workspace_id: str
+    session_id: str | None = None
+
+
+class MemoryUpdateRequest(MemoryCreateRequest):
+    memory_id: str
+    expected_revision: int = Field(ge=1)
+
+
+class MemoryItemVersion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    memory_id: str
+    revision: int = Field(ge=1)
+
+
+class MemoryMergeRequest(MemoryCreateRequest):
+    memories: tuple[MemoryItemVersion, ...] = Field(min_length=2)
 
 
 class KnowledgeRetrievalSettingsWrite(BaseModel):
@@ -477,6 +502,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             if str(exc) == "runtime_policy_revision_conflict":
                 raise HTTPException(status_code=409, detail="runtime policy revision conflict") from exc
             raise
+        backend.supervisor.notify_outbox()
         return _runtime_preferences_view(saved)
 
     @router.patch("/api/background-tasks/settings")
@@ -910,21 +936,30 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         return {"deleted": True, "path": target.relative_to(root).as_posix()}
 
     @router.get("/api/agent/instructions")
-    async def agent_instructions(request: Request) -> dict[str, str]:
-        _principal(request)
-        return backend.read_agent_instructions()
+    async def agent_instructions(request: Request, workspace_id: str) -> dict[str, object]:
+        try:
+            return backend.read_agent_instructions(principal_id=_principal(request), workspace_id=workspace_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.put("/api/agent/instructions")
-    async def replace_agent_instructions(request: Request, payload: AgentInstructionsWrite) -> dict[str, str]:
-        _principal(request)
+    async def replace_agent_instructions(request: Request, payload: AgentInstructionsWrite) -> dict[str, object]:
         try:
             return backend.replace_agent_instructions(
+                principal_id=_principal(request), workspace_id=payload.workspace_id,
                 content=payload.content, expected_digest=payload.expected_digest,
             )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             if str(exc) == "agent_instructions_changed":
                 raise HTTPException(status_code=409, detail="agent instructions changed") from exc
             raise
+
+    @router.get("/api/agent/instructions/legacy-draft")
+    async def legacy_agent_instructions(request: Request) -> dict[str, str]:
+        _principal(request)
+        return {"content": backend.agent_instructions.legacy_draft()}
 
     def require_memory_scope(
         *, principal_id: str, workspace_id: str | None, session_id: str | None,
@@ -1013,12 +1048,13 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         items = [
             {
                 "memory_id": item.revision.memory_id,
+                "revision": item.revision.revision,
                 "source_scope": item.revision.scope,
                 "memory_type": item.revision.kind,
                 "kind": item.revision.kind,
                 "content": item.revision.content,
                 "score": item.score,
-                "metadata": {"confidence": item.revision.confidence},
+                "metadata": {},
                 "namespace": [item.revision.scope, item.revision.session_id or item.revision.workspace_id],
                 "updated_at": item.revision.created_at,
             }
@@ -1060,6 +1096,55 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             "package_id": None,
             "namespace": [deleted.scope, deleted.session_id or deleted.workspace_id],
         }
+
+    @router.post("/api/memory/items")
+    async def create_memory(request: Request, payload: MemoryCreateRequest) -> dict[str, Any]:
+        principal_id = _principal(request)
+        require_memory_scope(principal_id=principal_id, workspace_id=payload.workspace_id,
+                             session_id=payload.session_id, scope=payload.scope)
+        item = backend.application.stores.memories.write_as_owner(
+            principal_id=principal_id, workspace_id=payload.workspace_id, session_id=payload.session_id,
+            draft=MemoryDraft(scope=payload.scope, kind=payload.kind, content=payload.content),
+        )
+        return {"memory": item.model_dump(mode="json")}
+
+    @router.put("/api/memory/items")
+    async def update_memory(request: Request, payload: MemoryUpdateRequest) -> dict[str, Any]:
+        principal_id = _principal(request)
+        require_memory_scope(principal_id=principal_id, workspace_id=payload.workspace_id,
+                             session_id=payload.session_id, scope=payload.scope)
+        try:
+            item = backend.application.stores.memories.update_as_owner(
+                memory_id=payload.memory_id, principal_id=principal_id, workspace_id=payload.workspace_id,
+                session_id=payload.session_id, expected_revision=payload.expected_revision,
+                draft=MemoryDraft(scope=payload.scope, kind=payload.kind, content=payload.content),
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"memory": item.model_dump(mode="json")}
+
+    @router.post("/api/memory/merge")
+    async def merge_memory(request: Request, payload: MemoryMergeRequest) -> dict[str, Any]:
+        principal_id = _principal(request)
+        require_memory_scope(principal_id=principal_id, workspace_id=payload.workspace_id,
+                             session_id=payload.session_id, scope=payload.scope)
+        try:
+            items = backend.application.stores.memories.merge_as_owner(
+                principal_id=principal_id, workspace_id=payload.workspace_id, session_id=payload.session_id,
+                drafts=tuple((item.memory_id, item.revision) for item in payload.memories),
+                draft=MemoryDraft(scope=payload.scope, kind=payload.kind, content=payload.content),
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"memories": [item.model_dump(mode="json") for item in items]}
 
     @router.get("/api/memory/recalled")
     async def recalled_memories(request: Request, session_id: str) -> dict[str, Any]:
@@ -2205,6 +2290,8 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         ),
         "memory_auto_recall_enabled": policy.memory_auto_recall_enabled if policy else True,
         "memory_agent_write_enabled": policy.memory_agent_write_enabled if policy else True,
+        "memory_auto_extract_enabled": policy.memory_auto_extract_enabled if policy else True,
+        "memory_extraction_interval_turns": policy.memory_extraction_interval_turns if policy else DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS,
         "memory_max_injected_items": policy.memory_max_injected_items if policy else 8,
         "memory_max_injected_tokens": policy.memory_max_injected_tokens if policy else 1200,
         "computer_use_enabled": policy.computer_use_enabled if policy else False,

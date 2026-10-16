@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 from typing import Any, Literal
 
+from combo.attachment_storage import reserve_attachment_directory
 from combo.document_processing import parse_file, parse_url, read_text_file
 from combo.file_capabilities import accepted_attachment_extensions
 from combo.file_utils import file_sha256
@@ -253,15 +254,19 @@ def import_payload_attachments(
             code="external_attachment_limit_exceeded",
         )
     imported: list[_ImportedLocalAttachment] = []
+    allocated: list[Path] = []
     try:
         for item in items:
+            entry = reserve_attachment_directory(storage_root)
+            allocated.append(entry)
+            relative = entry.relative_to(storage_root).as_posix()
             imported.append(
                 _import_payload_attachment(
                     item,
-                    storage_root=storage_root,
-                    runtime_path_root=runtime_path_root,
+                    storage_root=entry,
+                    runtime_path_root=str(PurePosixPath(runtime_path_root) / relative),
                     base_dir=base_dir,
-                    scope=scope,
+                    scope=str(PurePosixPath(scope) / relative),
                     policy=resolved_policy,
                 )
             )
@@ -277,8 +282,8 @@ def import_payload_attachments(
             policy=resolved_policy,
         )
     except Exception:
-        for imported_item in imported:
-            shutil.rmtree(imported_item.target_dir, ignore_errors=True)
+        for entry in allocated:
+            shutil.rmtree(entry, ignore_errors=True)
         raise
     return [item.ref.model_payload() for item in imported]
 

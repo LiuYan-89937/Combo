@@ -16,14 +16,14 @@ class RuntimeModelGenerationInterrupted(RuntimeError):
         message: str,
         *,
         partial_text: str = "",
-        reasoning_content: str = "",
+        reasoning_content: str | None = None,
         partial_tool_calls: tuple[dict[str, Any], ...] = (),
         stream_id: str = "",
         input_injections: tuple[Any, ...] = (),
     ) -> None:
         super().__init__(message)
         self.partial_text = str(partial_text or "")
-        self.reasoning_content = str(reasoning_content or "")
+        self.reasoning_content = str(reasoning_content) if reasoning_content is not None else None
         self.partial_tool_calls = tuple(
             dict(call)
             for call in (partial_tool_calls or ())

@@ -30,29 +30,39 @@ CANCELLATION_ERROR_CODES = frozenset(
 )
 
 
-class RuntimeErrorEnvelope(BaseModel):
+class RuntimeFailure(BaseModel):
+    """Serializable failure shared by graph state, observations and terminal events."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     code: str
     category: RuntimeErrorCategory
-    terminal_status: RuntimeTerminalStatus
+    terminal_status: RuntimeTerminalStatus = "failed"
     retryable: bool = False
     user_message_key: str
-    diagnostic_ref: str | None = None
-    request_id: str
-    runtime_instance_id: str
-    operation: str
     details: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(
         "code",
         "user_message_key",
-        "request_id",
-        "runtime_instance_id",
-        "operation",
     )
     @classmethod
     def _required_text(cls, value: str, info: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return text
+
+
+class RuntimeErrorEnvelope(RuntimeFailure):
+    diagnostic_ref: str | None = None
+    request_id: str
+    runtime_instance_id: str
+    operation: str
+
+    @field_validator("request_id", "runtime_instance_id", "operation")
+    @classmethod
+    def _identity_text(cls, value: str, info: Any) -> str:
         text = str(value or "").strip()
         if not text:
             raise ValueError(f"{info.field_name} must not be empty")

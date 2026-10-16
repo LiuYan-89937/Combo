@@ -32,6 +32,7 @@ from combo.runtime_protocol.contracts import (
 from combo.runtime_protocol.errors import (
     RuntimeErrorCategory,
     RuntimeErrorEnvelope,
+    RuntimeFailure,
     is_runtime_cancellation,
 )
 from combo.runtime_protocol.events import RuntimeEvent
@@ -171,6 +172,7 @@ __all__ = [
     "UserRuntimePolicy",
     "RuntimeErrorCategory",
     "RuntimeErrorEnvelope",
+    "RuntimeFailure",
     "is_runtime_cancellation",
     "CancelRuntimeRequestPayload",
     "CancelCommandRequestPayload",

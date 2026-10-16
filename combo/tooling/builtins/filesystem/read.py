@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from combo.file_capabilities import IMAGE_EXTENSIONS
+from combo.model_image_inputs import image_file_metadata
 from combo.tooling.builtins.filesystem.common import (
     filesystem_allowed_roots,
     filesystem_boundary,
@@ -53,11 +55,24 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         )
     if not target.is_file():
         raise IsADirectoryError(_directory_read_message(requested=path, resolved=str(target)))
+    result_path = workspace_relative_path(
+        target,
+        workspace_root=root,
+        mounts=filesystem_mounts(resources),
+    )
+    image = image_file_metadata(target) if target.suffix.lower() in IMAGE_EXTENSIONS else None
+    if image is not None:
+        return tool_envelope({
+            "path": result_path,
+            **image,
+            "size_bytes": target.stat().st_size,
+            "model_image": {"path": str(target), "mime_type": image["mime_type"]},
+        })
     raw = target.read_bytes()
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError(f"file is not valid utf-8 text: {target}") from exc
+        raise ValueError(f"file is neither a supported image nor valid utf-8 text: {target}") from exc
     lines = text.splitlines(keepends=True)
     total_lines = len(lines)
     start_index = start_line - 1
@@ -65,11 +80,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     selected = lines[start_index:end_index] if start_index < total_lines else []
     end_line = start_line + len(selected) - 1 if selected else max(start_line - 1, 0)
     return tool_envelope({
-        "path": workspace_relative_path(
-            target,
-            workspace_root=root,
-            mounts=filesystem_mounts(resources),
-        ),
+        "path": result_path,
         "content": "".join(selected),
         "start_line": start_line,
         "end_line": end_line,

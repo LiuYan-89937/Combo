@@ -19,6 +19,8 @@ export interface RuntimePreferences {
   context_compression_keep_recent_messages: number
   memory_auto_recall_enabled: boolean
   memory_agent_write_enabled: boolean
+  memory_auto_extract_enabled: boolean
+  memory_extraction_interval_turns: number
   memory_max_injected_items: number
   memory_max_injected_tokens: number
   computer_use_enabled: boolean
@@ -41,6 +43,8 @@ export type RuntimePreferencesPatch = Partial<Pick<
   | 'context_compression_keep_recent_messages'
   | 'memory_auto_recall_enabled'
   | 'memory_agent_write_enabled'
+  | 'memory_auto_extract_enabled'
+  | 'memory_extraction_interval_turns'
   | 'memory_max_injected_items'
   | 'memory_max_injected_tokens'
   | 'computer_use_enabled'

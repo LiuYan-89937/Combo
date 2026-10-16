@@ -147,9 +147,9 @@ if (-not (Test-TauriCli)) {
 }
 
 Write-Host "Preparing frontend dependencies..."
-& npm.cmd --prefix $FrontendDir ci
+& npm.cmd --prefix $FrontendDir run prepare-dependencies
 if ($LASTEXITCODE -ne 0) {
-    throw "npm ci failed with exit code $LASTEXITCODE."
+    throw "Frontend dependency preparation failed with exit code $LASTEXITCODE."
 }
 
 $DependencyInstaller = Join-Path $ProjectRoot "scripts\install_locked_python_dependencies.py"

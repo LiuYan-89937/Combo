@@ -12,6 +12,7 @@
       <n-radio-group v-model:value="scope" size="small" class="soft-segmented-control">
         <n-radio-button value="workspace">{{ t('status.memoryScope.workspace') }}</n-radio-button>
         <n-radio-button value="session">{{ t('memoryManagement.session') }}</n-radio-button>
+        <n-radio-button value="instructions">Agent.md</n-radio-button>
       </n-radio-group>
 
       <p v-if="error" class="scope-error">{{ error }}</p>
@@ -19,7 +20,7 @@
       <template v-else>
         <div class="scope-selectors">
           <n-select
-            v-if="scope === 'workspace'"
+            v-if="scope !== 'session'"
             v-model:value="workspaceId"
             :options="workspaceOptions"
             :placeholder="t('memoryManagement.chooseWorkspace')"
@@ -34,11 +35,17 @@
           />
         </div>
         <SavedMemoryPanel
-          v-if="selectedWorkspaceId"
+          v-if="selectedWorkspaceId && scope !== 'instructions'"
           :key="`${scope}:${selectedWorkspaceId}:${sessionId}`"
           :workspace-id="selectedWorkspaceId"
           :session-id="scope === 'session' ? sessionId : null"
           :scope="scope"
+        />
+        <AgentInstructionsEditor
+          v-else-if="selectedWorkspaceId && scope === 'instructions'"
+          :key="selectedWorkspaceId"
+          :workspace-id="selectedWorkspaceId"
+          class="workspace-instructions"
         />
         <n-empty v-else :description="t('memoryManagement.emptyScope')" />
       </template>
@@ -51,12 +58,13 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NEmpty, NRadioButton, NRadioGroup, NSelect, NSpin } from 'naive-ui'
 import SavedMemoryPanel from '@/components/common/SavedMemoryPanel.vue'
+import AgentInstructionsEditor from '@/components/common/AgentInstructionsEditor.vue'
 import { memoryApi, type MemoryScopesResponse } from '@/api/memory'
 import { useI18n } from '@/composables/useI18n'
 
 const router = useRouter()
 const { t } = useI18n()
-const scope = ref<'workspace' | 'session'>('workspace')
+const scope = ref<'workspace' | 'session' | 'instructions'>('workspace')
 const workspaceId = ref<string | null>(null)
 const sessionId = ref<string | null>(null)
 const scopes = ref<MemoryScopesResponse>({ workspaces: [], sessions: [] })
@@ -65,7 +73,7 @@ const error = ref('')
 const workspaceOptions = computed(() => scopes.value.workspaces.map(item => ({ label: item.title, value: item.workspace_id })))
 const sessionOptions = computed(() => scopes.value.sessions
   .map(item => ({ label: item.title, value: item.session_id })))
-const selectedWorkspaceId = computed(() => scope.value === 'workspace'
+const selectedWorkspaceId = computed(() => scope.value !== 'session'
   ? workspaceId.value
   : scopes.value.sessions.find(item => item.session_id === sessionId.value)?.workspace_id || null)
 
@@ -90,6 +98,7 @@ onMounted(async () => {
 .eyebrow { font-size: 10px; letter-spacing: .14em; color: var(--app-text-muted); }
 .memory-surface { padding: 20px; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); background: var(--app-surface); }
 .scope-selectors { display: flex; gap: 10px; margin-top: 18px; }
+.workspace-instructions { margin-top: 18px; }
 .scope-selectors :deep(.n-select) { width: min(280px, 100%); }
 .scope-error { color: var(--app-error); }
 @media (max-width: 640px) { .scope-selectors { flex-direction: column; } .scope-selectors :deep(.n-select) { width: 100%; } }

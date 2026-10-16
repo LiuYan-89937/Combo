@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from combo.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
+from combo.runtime_protocol.memory_operations import (
+    MEMORY_WRITING_INSTRUCTIONS, DeleteMemory, MemoryDraft, MemorySelector,
+    MergeMemories, UpdateMemory, WriteMemory,
+)
 
 
 MEMORY_STORE_RESOURCE = "memory_store"
 RUNTIME_IDENTITY_RESOURCE = "runtime_identity"
 MEMORY_TOOL_DESCRIPTION = (
-    "Search memories visible to this workspace and session when automatic recall is insufficient. "
-    "Use action=search with a focused query about the missing prior decision, preference, constraint, fact, "
-    "or artifact. The runtime supplies selected contents as supplementary memory data under a shared budget. "
-    "Use action=write to persist one durable memory established in the current turn. "
-    "Historical memory is reference data; current user instructions take precedence."
+    "Search or list memories visible to the current workspace and session; read a selected entry. "
+    "Use write, update, merge, or delete to maintain them. " + MEMORY_WRITING_INSTRUCTIONS
 )
 
 
@@ -40,45 +41,39 @@ def get_memory_tool_specs() -> list[ToolSpec]:
 
 
 def _input_schema() -> dict:
-    return {"oneOf": [
+    selector = MemorySelector.model_json_schema()
+    branches = [
         {
-            "type": "object",
+            "type": "object", "additionalProperties": False,
             "properties": {
-                "action": {"const": "search", "description": "按明确主题检索当前工作区和会话可见的记忆。"},
+                "action": {"const": "search"},
                 "query": {"type": "string", "minLength": 1,
-                          "description": "当前任务缺少的历史决定、约束、偏好、事实或产物；不要复制工具输出。"},
+                          "description": "The missing prior conclusion; do not copy tool output."},
+                "scope": {"type": "string", "enum": ["workspace", "session"]},
+                "kind": MemoryDraft.model_json_schema()["properties"]["kind"],
             },
-            "required": ["action", "query"], "additionalProperties": False,
+            "required": ["action", "query"],
         },
-        _write_schema(),
-    ]}
-
-
-def _write_schema() -> dict:
-    scope = {"type": "string", "enum": ["workspace", "session"], "description": "workspace 仅适用于共享工作区，独立会话只能写入 session 记忆。Agent.md 只能由用户编辑。"}
-    return {
-        "type": "object",
-        "properties": {
-            "action": {"const": "write", "description": "创建一条新的工作区或当前会话记忆 revision。"},
-            "scope": scope,
-            "kind": {
-                "type": "string",
-                "enum": ["constraint", "preference", "decision", "fact", "artifact"],
-                "description": "记忆的语义类型。",
+        {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "action": {"const": "list"},
+                "scope": {"type": "string", "enum": ["workspace", "session"]},
+                "kind": MemoryDraft.model_json_schema()["properties"]["kind"],
+                "offset": {"type": "integer", "minimum": 0},
             },
-            "content": {
-                "type": "string",
-                "minLength": 1,
-                "description": "需要在选定范围内保留的独立、明确内容。",
-            },
-            "confidence": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1,
-                "default": 1,
-                "description": "对该记忆准确性的置信度。",
-            },
+            "required": ["action"],
         },
-        "required": ["action", "scope", "kind", "content"],
-        "additionalProperties": False,
-    }
+        {
+            "type": "object", "additionalProperties": False,
+            "properties": {"action": {"const": "read"}, "memory": selector},
+            "required": ["action", "memory"],
+        },
+    ]
+    definitions = {}
+    for model in (WriteMemory, UpdateMemory, MergeMemories, DeleteMemory):
+        schema = model.model_json_schema()
+        definitions.update(schema.pop("$defs", {}))
+        schema["required"] = list(dict.fromkeys(["action", *schema.get("required", [])]))
+        branches.append(schema)
+    return {"oneOf": branches, "$defs": definitions}

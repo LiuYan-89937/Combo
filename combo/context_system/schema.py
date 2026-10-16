@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from combo.runtime_protocol.errors import RuntimeFailure
 
 
 ContextCandidateKind = Literal["memory"]
@@ -213,6 +214,7 @@ class ContextCompressionReport(BaseModel):
     tool_summary_token_estimate: int = 0
     summary_output_token_limit: int = 0
     error: str | None = None
+    failure: RuntimeFailure | None = None
     duration_ms: int = 0
 
 

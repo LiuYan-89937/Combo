@@ -3,17 +3,19 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 import os
-import re
 import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from fastapi import UploadFile
 
 from combo.paths import combo_data_path
+from combo.attachment_storage import (
+    attachment_upload_directories, reserve_attachment_directory, upload_directory,
+    upload_id_for_directory, upload_metadata_path,
+)
 from combo.runtime_attachments import (
     AttachmentContentAnalysis,
     AttachmentImportPolicy,
@@ -26,7 +28,6 @@ from combo.runtime_protocol import AttachmentRevisionRef
 
 ATTACHMENT_UPLOAD_TTL_SECONDS_ENV = "COMBO_ATTACHMENT_UPLOAD_TTL_SECONDS"
 DEFAULT_ATTACHMENT_UPLOAD_TTL_SECONDS = 24 * 60 * 60
-_UPLOAD_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
 class AttachmentUploadError(ValueError):
@@ -80,11 +81,11 @@ class AttachmentUploadStore:
     async def stage(self, upload: UploadFile, *, principal_id: str) -> StagedAttachment:
         self.cleanup_expired()
         name = _safe_upload_name(upload.filename)
-        attachment_id = uuid4().hex
-        entry = self.root / attachment_id
+        entry = reserve_attachment_directory(self.root)
+        attachment_id = upload_id_for_directory(entry)
+        metadata_path = upload_metadata_path(self.root, attachment_id)
         target = entry / name
         policy = AttachmentImportPolicy.from_env()
-        entry.mkdir(parents=True, exist_ok=False)
         size_bytes = 0
         digest = sha256()
         mime_type = resolve_attachment_mime_type(name, upload.content_type)
@@ -113,12 +114,13 @@ class AttachmentUploadStore:
                     policy=policy,
                 ).payload(),
             }
-            (entry / "metadata.json").write_text(
+            metadata_path.write_text(
                 json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
                 encoding="utf-8",
             )
         except Exception:
             shutil.rmtree(entry, ignore_errors=True)
+            metadata_path.unlink(missing_ok=True)
             raise
         return StagedAttachment(
             attachment_id=attachment_id,
@@ -140,15 +142,15 @@ class AttachmentUploadStore:
         principal_id: str,
     ) -> StagedAttachment:
         self.cleanup_expired()
-        attachment_id = uuid4().hex
         safe_name = _safe_upload_name(name)
         resolved_mime_type = resolve_attachment_mime_type(safe_name, mime_type)
-        entry = self.root / attachment_id
-        target = entry / safe_name
         policy = AttachmentImportPolicy.from_env()
         if policy.max_file_bytes is not None and len(content) > policy.max_file_bytes:
             raise AttachmentUploadError("attachment exceeds configured file size limit")
-        entry.mkdir(parents=True, exist_ok=False)
+        entry = reserve_attachment_directory(self.root)
+        attachment_id = upload_id_for_directory(entry)
+        metadata_path = upload_metadata_path(self.root, attachment_id)
+        target = entry / safe_name
         digest = sha256(content).hexdigest()
         try:
             target.write_bytes(content)
@@ -166,12 +168,13 @@ class AttachmentUploadStore:
                     policy=policy,
                 ).payload(),
             }
-            (entry / "metadata.json").write_text(
+            metadata_path.write_text(
                 json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
                 encoding="utf-8",
             )
         except Exception:
             shutil.rmtree(entry, ignore_errors=True)
+            metadata_path.unlink(missing_ok=True)
             raise
         return StagedAttachment(
             attachment_id=attachment_id,
@@ -186,10 +189,11 @@ class AttachmentUploadStore:
 
     def resolve(self, attachment_id: str) -> StagedAttachment:
         normalized = str(attachment_id or "").strip().lower()
-        if not _UPLOAD_ID_PATTERN.fullmatch(normalized):
-            raise AttachmentUploadError("invalid attachment_id")
-        entry = self.root / normalized
-        metadata_path = entry / "metadata.json"
+        try:
+            entry = upload_directory(self.root, normalized)
+        except ValueError as exc:
+            raise AttachmentUploadError(str(exc)) from exc
+        metadata_path = upload_metadata_path(self.root, normalized)
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError) as exc:
@@ -222,7 +226,7 @@ class AttachmentUploadStore:
         expected_digest = str(content_digest or "").strip()
         if expected_digest and staged.content_digest != expected_digest:
             raise AttachmentUploadError("attachment content digest does not match")
-        metadata_path = staged.path.parent / "metadata.json"
+        metadata_path = upload_metadata_path(self.root, staged.attachment_id)
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         if metadata.get("retained") is not True:
             metadata["retained"] = True
@@ -252,7 +256,7 @@ class AttachmentUploadStore:
         if not self.root.is_dir():
             return
         threshold = time.time() - self.ttl_seconds
-        for entry in self.root.iterdir():
+        for entry in attachment_upload_directories(self.root):
             if not entry.is_dir():
                 continue
             try:
@@ -260,24 +264,31 @@ class AttachmentUploadStore:
             except OSError:
                 continue
             try:
-                metadata = json.loads((entry / "metadata.json").read_text(encoding="utf-8"))
+                metadata_path = upload_metadata_path(self.root, upload_id_for_directory(entry))
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 metadata = {}
             if metadata.get("retained") is True:
                 continue
             if modified_at < threshold:
                 shutil.rmtree(entry, ignore_errors=True)
+                metadata_path.unlink(missing_ok=True)
 
     def delete(self, attachment_id: str) -> tuple[int, int]:
         normalized = str(attachment_id or "").strip().lower()
-        if not _UPLOAD_ID_PATTERN.fullmatch(normalized):
+        try:
+            entry = upload_directory(self.root, normalized).resolve()
+        except ValueError:
             return 0, 0
-        entry = (self.root / normalized).resolve()
-        if entry.parent != self.root or not entry.is_dir():
+        if self.root not in entry.parents or not entry.is_dir():
             return 0, 0
         files = tuple(item for item in entry.rglob("*") if item.is_file())
+        metadata_path = upload_metadata_path(self.root, normalized)
+        if metadata_path.parent != entry and metadata_path.is_file():
+            files = (*files, metadata_path)
         byte_count = sum(item.stat().st_size for item in files)
         shutil.rmtree(entry)
+        metadata_path.unlink(missing_ok=True)
         return byte_count, len(files)
 
     def _resolve_attachment_item(self, item: Any) -> Any:

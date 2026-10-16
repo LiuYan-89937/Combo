@@ -27,7 +27,6 @@ class ModelReasoningSettings:
     effort: str | None = None
     summary: str | None = None
     budget_tokens: int | None = None
-    send_history: bool | None = None
 
     @property
     def mode(self) -> str | None:

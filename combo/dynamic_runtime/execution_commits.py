@@ -29,6 +29,7 @@ from combo.runtime_protocol import (
 )
 from combo.runtime_protocol.events import RuntimeEventPayload
 from combo.runtime_protocol.contracts import RuntimeExecutionStatus
+from combo.runtime_protocol.interruption import RuntimeToolExecutionCancelled
 from combo.runtime_protocol.state_machines import (
     CONVERSATION_TURN_TRANSITIONS,
     RUNTIME_INSTANCE_TRANSITIONS,
@@ -37,7 +38,7 @@ from combo.runtime_protocol.state_machines import (
 )
 
 
-class RuntimeCancellationRequested(RuntimeError):
+class RuntimeCancellationRequested(RuntimeToolExecutionCancelled):
     pass
 
 
@@ -138,10 +139,10 @@ class RuntimeExecutionCommitStore:
         model_usage: Iterable[RuntimeModelUsage] = (),
         context_snapshot: ConversationContextSnapshot | None = None,
         error: RuntimeErrorEnvelope | None = None,
-        settle_failure: bool = False,
+        settle_exception: bool = False,
     ) -> RuntimeInstance:
-        if settle_failure and status != "failed":
-            raise ValueError("failure settlement requires a failed execution outcome")
+        if settle_exception and status not in {"failed", "cancelled"}:
+            raise ValueError("exception settlement requires a failed or cancelled execution outcome")
         if status not in {"waiting_approval", "waiting_external", "completed", "failed", "cancelled"}:
             raise ValueError(f"unsupported runtime execution commit status: {status}")
         now = utc_now_text()
@@ -153,7 +154,7 @@ class RuntimeExecutionCommitStore:
 
         with self._database.transaction() as conn:
             current = _load_instance(conn, claimed_instance.runtime_instance_id)
-            if settle_failure and current.attempt_id == claimed_instance.attempt_id:
+            if settle_exception and current.attempt_id == claimed_instance.attempt_id:
                 if current.status in {"completed", "failed", "cancelled"}:
                     return current
                 if current.cancel_requested_at is not None:
@@ -253,13 +254,13 @@ class RuntimeExecutionCommitStore:
             advance_conversation_revision(conn, current.request.session_id, updated_at=now)
         return updated_instance
 
-    def fail_claimed(self, claimed_instance: RuntimeInstance, error: RuntimeErrorEnvelope) -> RuntimeInstance:
+    def settle_exception(self, claimed_instance: RuntimeInstance, error: RuntimeErrorEnvelope) -> RuntimeInstance:
         return self.commit(
             claimed_instance=claimed_instance,
-            status="failed",
-            event_payload={"kind": "failed", "error": error.model_dump(mode="json")},
+            status=error.terminal_status,
+            event_payload={"kind": error.terminal_status, "error": error.model_dump(mode="json")},
             error=error,
-            settle_failure=True,
+            settle_exception=True,
         )
 
 

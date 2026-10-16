@@ -1,10 +1,21 @@
 import { requestJson, withQuery } from './http'
 
+export const MEMORY_CONTENT_MAX_CHARS = 100
+export type MemoryKind = 'constraint' | 'preference' | 'decision' | 'fact' | 'artifact'
+export interface MemoryDraft {
+  scope: 'workspace' | 'session'
+  kind: MemoryKind
+  content: string
+  workspace_id: string
+  session_id: string | null
+}
+
 export interface MemoryContextItemView {
   memory_id: string
+  revision: number
   source_scope: 'workspace' | 'session'
   memory_type: string
-  kind: string
+  kind: MemoryKind
   content: string
   score: number
   metadata: Record<string, any>
@@ -54,6 +65,13 @@ export interface MemoryScopesResponse {
 export type MemoryScopeFilter = 'all' | 'workspace' | 'session'
 
 export const memoryApi = {
+  createItem: (draft: MemoryDraft) => requestJson('/api/memory/items', { method: 'POST', body: JSON.stringify(draft) }),
+  updateItem: (item: MemoryContextItemView, draft: MemoryDraft) => requestJson('/api/memory/items', {
+    method: 'PUT', body: JSON.stringify({ ...draft, memory_id: item.memory_id, expected_revision: item.revision }),
+  }),
+  mergeItems: (items: MemoryContextItemView[], draft: MemoryDraft) => requestJson('/api/memory/merge', {
+    method: 'POST', body: JSON.stringify({ ...draft, memories: items.map(item => ({ memory_id: item.memory_id, revision: item.revision })) }),
+  }),
   scopes: () => requestJson<MemoryScopesResponse>('/api/memory/scopes'),
   recalled: (sessionId: string) =>
     requestJson<{ turn_id: string | null; items: RecalledMemoryView[] }>(

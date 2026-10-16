@@ -3,14 +3,61 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
-from langchain_core.messages import BaseMessage
-from PIL import Image, ImageOps, ImageSequence
+from langchain_core.messages import BaseMessage, ToolMessage
+from PIL import Image, ImageOps, ImageSequence, UnidentifiedImageError
 
 
 LOCAL_IMAGE_SOURCE_TYPE = "combo_local_path"
 MODEL_IMAGE_MAX_SIZE = (4096, 4096)
+MODEL_IMAGE_NATIVE_FORMATS = frozenset({"PNG", "JPEG", "GIF", "WEBP"})
+
+
+def image_file_metadata(path: Path) -> dict[str, Any] | None:
+    """Inspect image headers without embedding bytes in tool output."""
+    try:
+        with Image.open(path) as source:
+            mime_type = Image.MIME.get(source.format or "")
+            if mime_type is None:
+                raise ValueError(f"image file has an unknown MIME type: {path}")
+            return {"mime_type": mime_type, "width": source.width, "height": source.height}
+    except UnidentifiedImageError:
+        return None
+
+
+def is_image_content_block(block: Any) -> TypeGuard[dict[str, Any]]:
+    if not isinstance(block, dict):
+        return False
+    block_type = str(block.get("type") or "").strip()
+    if block_type in {"image", "image_url", "input_image"}:
+        return True
+    source = block.get("source")
+    return isinstance(source, dict) and str(source.get("media_type") or "").startswith("image/")
+
+
+def message_image_parts(message: BaseMessage) -> list[dict[str, Any]]:
+    content = message.content
+    if not isinstance(content, list):
+        return []
+    return [item for item in content if is_image_content_block(item)]
+
+
+def tool_image_parts(message: ToolMessage) -> list[dict[str, Any]]:
+    """Read image references without accessing image files or materializing bytes."""
+    inline_images = message_image_parts(message)
+    if inline_images:
+        return inline_images
+    metadata = message.additional_kwargs.get("combo_tool_image")
+    if not isinstance(metadata, dict):
+        return []
+    path = str(metadata.get("path") or "").strip()
+    mime_type = str(metadata.get("mime_type") or "").strip()
+    if not path or not mime_type.startswith("image/"):
+        raise ValueError("tool image metadata requires an image path and MIME type")
+    if not Path(path).is_absolute():
+        raise ValueError(f"tool image requires a resolved absolute path: {path}")
+    return [local_image_content_block(path=path, mime_type=mime_type)]
 
 
 def local_image_content_block(*, path: str | Path, mime_type: str) -> dict[str, Any]:
@@ -64,13 +111,14 @@ def _materialize_local_image_block(block: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_model_image(data: bytes) -> tuple[bytes, str]:
-    """Bound model inputs in memory without changing the source file."""
+    """Normalize format and bound dimensions without changing the source file."""
     with Image.open(BytesIO(data)) as source:
         image_format = source.format
         mime_type = Image.MIME.get(image_format or "")
         if mime_type is None:
             raise ValueError("model image input has an unknown image format")
-        if source.width <= MODEL_IMAGE_MAX_SIZE[0] and source.height <= MODEL_IMAGE_MAX_SIZE[1]:
+        native_format = image_format in MODEL_IMAGE_NATIVE_FORMATS
+        if native_format and source.width <= MODEL_IMAGE_MAX_SIZE[0] and source.height <= MODEL_IMAGE_MAX_SIZE[1]:
             return data, mime_type
         frames = []
         durations = []
@@ -82,11 +130,13 @@ def prepare_model_image(data: bytes) -> tuple[bytes, str]:
             durations.append(frame.info.get("duration", 0))
         output = BytesIO()
         if len(frames) > 1:
+            output_format = image_format if native_format else "PNG"
             frames[0].save(
-                output, format=image_format, save_all=True, append_images=frames[1:],
+                output, format=output_format, save_all=True, append_images=frames[1:],
                 duration=durations,
                 **({"loop": source.info["loop"]} if "loop" in source.info else {}),
             )
+            mime_type = Image.MIME[output_format]
         else:
             frames[0].save(output, format="PNG")
             mime_type = "image/png"

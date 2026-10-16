@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v32"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v34"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1544,6 +1544,62 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 "create index idx_runtime_model_usage_turn on runtime_model_usage(session_id, turn_id, created_at)",
             ),
         ),
+        MigrationStep(
+            version=33,
+            name="remove_memory_confidence",
+            statements=tuple(
+                f"""
+                update {table}
+                set payload_json = json_remove(payload_json, '$.confidence')
+                where json_type(payload_json, '$.confidence') is not null
+                """
+                for table in ("memory_revisions", "legacy_user_memory_revisions")
+            ),
+        ),
+        MigrationStep(
+            version=34,
+            name="scoped_instructions_and_memory_extraction_progress",
+            statements=(
+                """
+                create table memory_extraction_progress (
+                  session_id text primary key references conversations(session_id) on delete cascade,
+                  through_task_revision integer not null default 0,
+                  failed_at_task_revision integer not null default 0,
+                  attempted_policy_revision integer not null default 0,
+                  last_error text,
+                  model_snapshot_json text,
+                  updated_at text not null
+                )
+                """,
+                """
+                insert into memory_extraction_progress(session_id, through_task_revision, updated_at)
+                select conversation.session_id, coalesce(max(turn.task_revision), 0),
+                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                from conversations conversation
+                left join conversation_turns turn on turn.session_id = conversation.session_id
+                  and turn.status = 'completed'
+                  and exists (
+                    select 1 from runtime_instances runtime
+                    join conversation_messages message on message.message_id = turn.user_message_id
+                    where runtime.runtime_instance_id = turn.active_runtime_instance_id
+                      and json_extract(runtime.payload_json, '$.request.runtime_role') = 'main'
+                      and runtime.status = 'completed'
+                      and json_extract(message.payload_json, '$.visibility') = 'public'
+                      and json_extract(runtime.payload_json, '$.request.scheduler_run_id') is null
+                      and json_extract(turn.payload_json, '$.steering') is null
+                  )
+                group by conversation.session_id
+                """,
+                """
+                create table workspace_agent_instructions (
+                  workspace_id text primary key references workspaces(workspace_id) on delete cascade,
+                  content text not null,
+                  revision integer not null,
+                  updated_at text not null
+                )
+                """,
+            ),
+        ),
     )
 
 
@@ -1561,6 +1617,8 @@ def _schema_allowlist() -> set[tuple[str, str]]:
     return {
         ("table", "dynamic_runtime_schema_migrations"),
         ("table", "dynamic_runtime_schema_epoch"),
+        ("table", "memory_extraction_progress"),
+        ("table", "workspace_agent_instructions"),
         ("table", "principals"),
         ("table", "workspaces"),
         ("table", "conversations"),

@@ -73,6 +73,7 @@ class DynamicRuntimeSupervisor:
         self._outbox_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._temporary_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._process_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        self._memory_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._tasks: list[asyncio.Task[None]] = []
 
     @property
@@ -86,6 +87,7 @@ class DynamicRuntimeSupervisor:
         self._outbox_publisher.recover_interrupted_publications()
         self._tasks = [
             asyncio.create_task(self._process_loop(), name="dynamic-runtime-process-completions"),
+            asyncio.create_task(self._memory_loop(), name="dynamic-runtime-memory-extraction"),
             *(
                 asyncio.create_task(
                     self._command_loop(worker_index),
@@ -115,6 +117,7 @@ class DynamicRuntimeSupervisor:
         tasks = tuple(self._tasks)
         self._stop.set()
         _notify(self._process_wakeup)
+        _notify(self._memory_wakeup)
         await asyncio.to_thread(self._application.stores.run_controls.begin_shutdown)
         self.notify_commands()
         self.notify_outbox()
@@ -131,6 +134,7 @@ class DynamicRuntimeSupervisor:
 
     def notify_outbox(self) -> None:
         _notify(self._outbox_wakeup)
+        _notify(self._memory_wakeup)
 
     def notify_temporary_tasks(self) -> None:
         _notify(self._temporary_wakeup)
@@ -149,6 +153,7 @@ class DynamicRuntimeSupervisor:
                 processed = False
             if processed:
                 self._enqueue_pending_completion_turns()
+                _notify(self._memory_wakeup)
                 self.notify_outbox()
                 continue
             await self._wait_for(
@@ -175,6 +180,17 @@ class DynamicRuntimeSupervisor:
             except Exception as exc:
                 self._report_failure("process_completion", exc)
             await self._wait_for(self._process_wakeup)
+
+    async def _memory_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                processed = await asyncio.to_thread(self._application.memory_extraction.run_one)
+            except Exception as exc:
+                self._report_failure("memory_extraction", exc)
+                processed = False
+            if processed:
+                continue
+            await self._memory_wakeup.get()
 
     def enqueue_process_completion(self, instance: RuntimeInstance, output: dict[str, Any]) -> None:
         request = instance.request

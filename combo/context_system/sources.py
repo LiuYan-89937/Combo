@@ -93,7 +93,7 @@ def memory_candidate(result: MemorySearchResult, *, origin: str = "automatic") -
             "principal_id": revision.principal_id, "scope": revision.scope,
             "workspace_id": revision.workspace_id, "session_id": revision.session_id,
             "memory_kind": revision.kind,
-            "content_digest": revision.content_digest, "confidence": revision.confidence,
+            "content_digest": revision.content_digest,
             "source_session_id": revision.source_session_id, "source_turn_id": revision.source_turn_id,
             "created_at": revision.created_at, "retrieval_origin": origin,
             "retrieval_evidence": [asdict(item) for item in result.evidence],

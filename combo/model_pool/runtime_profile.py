@@ -5,7 +5,6 @@ from dataclasses import replace
 from combo.model_pool.schema import ModelPoolCapabilities
 from combo.models.capabilities import (
     FeatureScope,
-    ModelProviderCapabilities,
     ProviderProfile,
     resolve_provider_profile,
 )
@@ -47,22 +46,6 @@ def resolve_model_pool_provider_profile(
             default_structured_output_method=(
                 provider_capabilities.default_structured_output_method
             ),
-            reasoning=_declared_feature(
-                capabilities.reasoning_supported,
-                provider_capabilities.reasoning,
-            ),
-            reasoning_efforts=_reasoning_efforts(
-                capabilities,
-                provider_capabilities,
-            ),
-            reasoning_content=_declared_feature(
-                capabilities.reasoning_content,
-                provider_capabilities.reasoning_content,
-            ),
-            send_reasoning_history=_reasoning_history_support(
-                capabilities,
-                provider_capabilities,
-            ),
             cache_usage=_declared_feature(
                 capabilities.cache_usage,
                 provider_capabilities.cache_usage,
@@ -75,22 +58,3 @@ def _declared_feature(enabled: bool, provider_support: FeatureScope) -> FeatureS
     if not enabled:
         return "unsupported"
     return provider_support if provider_support != "unsupported" else "model_specific"
-
-
-def _reasoning_efforts(
-    capabilities: ModelPoolCapabilities,
-    provider_capabilities: ModelProviderCapabilities,
-) -> tuple[str, ...]:
-    if not capabilities.reasoning_supported:
-        return ()
-    return tuple(capabilities.reasoning_efforts) or provider_capabilities.reasoning_efforts
-
-
-def _reasoning_history_support(
-    capabilities: ModelPoolCapabilities,
-    provider_capabilities: ModelProviderCapabilities,
-) -> FeatureScope:
-    if not capabilities.reasoning_supported or not capabilities.reasoning_content:
-        return "unsupported"
-    current = provider_capabilities.send_reasoning_history
-    return current if current != "unsupported" else "model_specific"

@@ -24,7 +24,6 @@ class MemoryRevision(FrozenProtocolModel):
     status: MemoryStatus = "active"
     content: str
     content_digest: str = ""
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_session_id: str | None
     source_turn_id: str | None
     created_by_runtime_instance_id: str | None
@@ -78,8 +77,6 @@ class MemoryRevision(FrozenProtocolModel):
         )
         if any(value is None for value in provenance) and any(value is not None for value in provenance):
             raise ValueError("memory provenance must be either complete or detached")
-        if self.status == "active" and self.created_by_runtime_instance_id is None:
-            raise ValueError("active memory requires runtime provenance")
         expected = sha256(self.content.encode("utf-8")).hexdigest()
         if self.content_digest and self.content_digest != expected:
             raise ValueError("memory content_digest does not match content")

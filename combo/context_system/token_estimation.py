@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from typing import Any
+from combo.models.reasoning import is_reasoning_content_block, reasoning_content_from_message
 
 
 def estimate_messages_tokens(messages: list[Any]) -> int:
-    return sum(estimate_text_tokens(message_text(message)) for message in messages)
+    return sum(
+        estimate_text_tokens(message_text(message))
+        + estimate_text_tokens(reasoning_content_from_message(message) or "")
+        for message in messages
+    )
 
 
 def estimate_text_tokens(text: str) -> int:
@@ -22,6 +27,8 @@ def message_text(message: Any) -> str:
                 parts.append(block)
                 continue
             if not isinstance(block, dict):
+                continue
+            if is_reasoning_content_block(block):
                 continue
             block_type = str(block.get("type") or "").strip()
             if block_type in {"image", "image_url", "input_image"}:

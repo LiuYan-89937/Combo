@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.messages import AIMessage
+from combo.models.content import assistant_history_content
 
 from combo.runtime_kernel.nodes.base import NodeExecutionContext
 from combo.runtime_kernel.plan_execute_tools import (
@@ -181,7 +182,7 @@ def _plan_and_execute_planner_waiting_for_input(*, context: NodeExecutionContext
 def _reasoning_content_from_metadata(metadata: dict[str, Any] | None) -> str | None:
     value = (metadata or {}).get("reasoning_content")
     if isinstance(value, str):
-        return value.strip() or None
+        return value
     return None
 
 
@@ -219,11 +220,11 @@ def _ai_message_with_origin(
         "combo_origin_node_id": context.node_id,
         "combo_origin_impl": context.impl,
     }
-    if reasoning_content:
+    if reasoning_content is not None:
         additional_kwargs["reasoning_content"] = reasoning_content
     message = source if source is not None else AIMessage(content=content)
     return message.model_copy(update={
-        "content": content,
+        "content": assistant_history_content(source.content) if source is not None else content,
         "tool_calls": tool_calls,
         "additional_kwargs": additional_kwargs,
     })

@@ -29,6 +29,8 @@ from combo.runtime_protocol.messages import (
     incomplete_tool_call_ids,
 )
 from combo.runtime_protocol.interruption import RuntimeModelGenerationInterrupted
+from combo.runtime_protocol.errors import RuntimeFailure
+from combo.runtime_errors import runtime_failure_from_exception
 from combo.tooling.execution_context import acknowledge_runtime_inputs, consume_runtime_inputs
 from combo.tooling.execution_context import (
     runtime_terminal_cancellation_requested,
@@ -62,7 +64,9 @@ def make_fixed_runner(
         if state.execution.finished:
             return runtime_graph_patch(state)
         if _timed_out(state) and not _must_close_tool_protocol(implementation, raw_state):
-            _finish(state, status="failed", error="Execution timed out before node execution.")
+            _finish(state, status="failed", failure=runtime_failure_from_exception(
+                TimeoutError("Execution timed out before node execution."),
+            ), location=node_id)
             return runtime_graph_patch(state)
 
         started = perf_counter()
@@ -202,15 +206,20 @@ def make_fixed_runner(
             )
         except Exception as exc:
             failed = active_state
-            failed.execution.retry_count += 1
-            _finish(failed, status="failed", error=str(exc), location=node_id)
-            emit_state_event(
-                services,
-                failed,
-                "node_failed",
-                node_id=node_id,
-                payload={"impl": implementation.impl_id, "error": str(exc)},
-            )
+            failure = runtime_failure_from_exception(exc)
+            _finish(failed, status=failure.terminal_status, failure=failure, location=node_id)
+            if failure.terminal_status == "failed":
+                failed.execution.retry_count += 1
+                emit_state_event(
+                    services,
+                    failed,
+                    "node_failed",
+                    node_id=node_id,
+                    payload={
+                        "impl": implementation.impl_id, "error": str(exc),
+                        "failure": failure.model_dump(mode="json"),
+                    },
+                )
             return runtime_graph_patch(failed)
 
     return runner
@@ -221,12 +230,12 @@ def _preserve_interrupted_conversation(
     interruption: RuntimeModelGenerationInterrupted,
 ) -> None:
     partial_text = str(interruption.partial_text or "").strip()
-    reasoning_content = str(interruption.reasoning_content or "").strip()
+    reasoning_content = interruption.reasoning_content
     state.conversation.assistant_draft = (
         partial_text or state.conversation.assistant_draft
     )
     state.conversation.reasoning_content = (
-        reasoning_content or state.conversation.reasoning_content
+        reasoning_content if reasoning_content is not None else state.conversation.reasoning_content
     )
 
 
@@ -236,12 +245,12 @@ def _interrupted_model_messages(
     error_code: str,
 ) -> list[Any]:
     partial_text = str(interruption.partial_text or "").strip()
-    reasoning_content = str(interruption.reasoning_content or "").strip()
+    reasoning_content = interruption.reasoning_content
     partial_tool_calls = [dict(call) for call in interruption.partial_tool_calls]
     messages: list[Any] = []
-    if partial_text or reasoning_content or partial_tool_calls:
+    if partial_text or reasoning_content is not None or partial_tool_calls:
         additional_kwargs = {"completion_reason": "user_interrupted"}
-        if reasoning_content:
+        if reasoning_content is not None:
             additional_kwargs["reasoning_content"] = reasoning_content
         messages.append(
             AIMessage(
@@ -365,7 +374,9 @@ def make_context_preparer(
             _finish(state, status="cancelled", location="runtime.cancel")
             return runtime_graph_patch(state)
         if _timed_out(state):
-            _finish(state, status="failed", error="Execution timed out before context preparation.", location=node_id)
+            _finish(state, status="failed", failure=runtime_failure_from_exception(
+                TimeoutError("Execution timed out before context preparation."),
+            ), location=node_id)
             return runtime_graph_patch(state)
         injected = _consume_steered_inputs(state)
         messages = [*list(raw_state.get("messages") or []), *injected]
@@ -400,7 +411,8 @@ def make_context_preparer(
         except GraphInterrupt:
             raise
         except Exception as exc:
-            _finish(state, status="failed", error=str(exc), location=node_id)
+            failure = runtime_failure_from_exception(exc)
+            _finish(state, status=failure.terminal_status, failure=failure, location=node_id)
             return runtime_graph_patch(state, messages=injected)
 
     return prepare
@@ -440,7 +452,9 @@ def _resolve_after_node(
         return
     resolved = next_node(node_id, state.execution.route_decision)
     if resolved is None:
-        _finish(state, status="failed", error=f"No next node resolved from {node_id}.")
+        _finish(state, status="failed", failure=runtime_failure_from_exception(
+            RuntimeError(f"No next node resolved from {node_id}."),
+        ), location=node_id)
         state.execution.current_node = node_id
         return
     condition, target = resolved
@@ -452,14 +466,15 @@ def _finish(
     state: RuntimeState,
     *,
     status: str,
-    error: str | None = None,
+    failure: RuntimeFailure | None = None,
     location: str | None = None,
 ) -> None:
     state.execution.finished = True
     state.execution.finish_status = status
     state.execution.route_decision = "execution.finished"
-    if error:
-        state.execution.last_error = error
+    state.execution.failure = failure
+    if failure is not None:
+        state.execution.last_error = str(failure.details.get("message") or failure.code)
     if location:
         state.execution.last_error_location = location
 

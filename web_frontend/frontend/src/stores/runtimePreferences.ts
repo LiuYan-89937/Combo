@@ -24,6 +24,7 @@ export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
 export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'react'
 export const DEFAULT_MEMORY_MAX_INJECTED_ITEMS = 8
 export const DEFAULT_MEMORY_MAX_INJECTED_TOKENS = 1200
+export const DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS = 3
 export type RunningMessageMode = 'queue' | 'steer'
 export const DEFAULT_RUNNING_MESSAGE_MODE: RunningMessageMode = 'queue'
 
@@ -56,6 +57,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const runningMessageMode = ref<RunningMessageMode>(readStoredRunningMessageMode())
   const memoryAutoRecallEnabled = ref(true)
   const memoryAgentWriteEnabled = ref(true)
+  const memoryAutoExtractEnabled = ref(true)
+  const memoryExtractionIntervalTurns = ref(DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS)
   const memoryMaxInjectedItems = ref(DEFAULT_MEMORY_MAX_INJECTED_ITEMS)
   const memoryMaxInjectedTokens = ref(DEFAULT_MEMORY_MAX_INJECTED_TOKENS)
   const computerUseEnabled = ref(false)
@@ -159,6 +162,16 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     enqueue({ memory_max_injected_items: memoryMaxInjectedItems.value })
   }
 
+  function setMemoryAutoExtractEnabled(value: boolean): void {
+    memoryAutoExtractEnabled.value = value
+    enqueue({ memory_auto_extract_enabled: value })
+  }
+
+  function setMemoryExtractionIntervalTurns(value: number): void {
+    memoryExtractionIntervalTurns.value = Math.max(1, Math.round(value))
+    enqueue({ memory_extraction_interval_turns: memoryExtractionIntervalTurns.value })
+  }
+
   function setMemoryMaxInjectedTokens(value: number): void {
     memoryMaxInjectedTokens.value = Math.max(100, Math.round(value))
     enqueue({ memory_max_injected_tokens: memoryMaxInjectedTokens.value })
@@ -218,6 +231,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     contextCompressionKeepRecentMessages.value = value.context_compression_keep_recent_messages
     memoryAutoRecallEnabled.value = value.memory_auto_recall_enabled
     memoryAgentWriteEnabled.value = value.memory_agent_write_enabled
+    memoryAutoExtractEnabled.value = value.memory_auto_extract_enabled
+    memoryExtractionIntervalTurns.value = value.memory_extraction_interval_turns
     memoryMaxInjectedItems.value = value.memory_max_injected_items
     memoryMaxInjectedTokens.value = value.memory_max_injected_tokens
     computerUseEnabled.value = value.computer_use_enabled
@@ -249,6 +264,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     runningMessageMode,
     memoryAutoRecallEnabled,
     memoryAgentWriteEnabled,
+    memoryAutoExtractEnabled,
+    memoryExtractionIntervalTurns,
     memoryMaxInjectedItems,
     memoryMaxInjectedTokens,
     computerUseEnabled,
@@ -269,6 +286,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setRunningMessageMode,
     setMemoryAutoRecallEnabled,
     setMemoryAgentWriteEnabled,
+    setMemoryAutoExtractEnabled,
+    setMemoryExtractionIntervalTurns,
     setMemoryMaxInjectedItems,
     setMemoryMaxInjectedTokens,
     setComputerUseEnabled,

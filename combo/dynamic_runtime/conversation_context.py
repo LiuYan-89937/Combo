@@ -5,6 +5,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 
 from combo.context_system.compression import is_context_summary_message, maybe_compress_messages
+from combo.runtime_errors import RuntimeFailureError
 from combo.context_system.runtime import ContextSystemRuntime
 from combo.context_system.token_counter import context_window_payload
 from combo.context_system.token_estimation import estimate_messages_tokens
@@ -146,7 +147,9 @@ class ConversationContextService:
         )
         report_payload = report.model_dump(mode="json")
         if report.status == "failed":
-            raise RuntimeError(report.error or "manual context compression failed")
+            if report.failure is None:
+                raise RuntimeError("failed context compression report has no failure details")
+            raise RuntimeFailureError(report.failure)
         if report.status != "completed":
             return {**report_payload, "reason": report.reason or "no_compressible_history"}
 

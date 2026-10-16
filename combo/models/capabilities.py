@@ -57,7 +57,10 @@ GENERIC_OPENAI_COMPATIBLE_CHAT_CAPABILITIES = ModelProviderCapabilities(
     transport="openai_chat_completions",
     structured_output_methods=("json_mode", "function_calling"),
     default_structured_output_method="json_mode",
+    reasoning="model_specific",
     reasoning_efforts=("low", "medium", "high"),
+    reasoning_content="adapter",
+    send_reasoning_history="adapter",
 )
 
 OPENAI_RESPONSES_CAPABILITIES = ModelProviderCapabilities(

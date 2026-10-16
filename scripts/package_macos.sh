@@ -4,8 +4,10 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${PROJECT_ROOT}"
+SCRIPT_DIRECTORY="${BASH_SOURCE[0]%/*}"
+[[ "${SCRIPT_DIRECTORY}" != "${BASH_SOURCE[0]}" ]] || SCRIPT_DIRECTORY="."
+cd -P -- "${SCRIPT_DIRECTORY}/.."
+PROJECT_ROOT="${PWD}"
 TAURI_DIR="${PROJECT_ROOT}/src-tauri"
 CONFIG_PATH="${TAURI_DIR}/tauri.conf.json"
 PYTHON_RUNTIME="${TAURI_DIR}/resources/python/bin/python3"
@@ -70,7 +72,7 @@ case "${HOST_ARCH}" in
 esac
 
 echo "Preparing frontend dependencies..."
-npm --prefix "${FRONTEND_DIR}" ci
+npm --prefix "${FRONTEND_DIR}" run prepare-dependencies
 
 echo "Preparing bundled Python runtime..."
 python3 "${PROJECT_ROOT}/scripts/bundle_python.py"

@@ -90,6 +90,13 @@ def execute_structured_output_invocation(
                 if invoke_model is not None
                 else invocation.model.invoke(list(attempt_messages), config=config)
             )
+        except RuntimeModelGenerationInterrupted:
+            raise
+        except Exception as exc:
+            if on_attempt_failure is not None:
+                on_attempt_failure(exc, attempt, attempts)
+            raise
+        try:
             value, raw = _validate_structured_response(
                 response,
                 output_model=invocation.output_model,
@@ -100,8 +107,6 @@ def execute_structured_output_invocation(
                 attempt_count=attempt,
                 messages=attempt_messages,
             )
-        except RuntimeModelGenerationInterrupted:
-            raise
         except Exception as exc:
             last_error = exc
             if on_attempt_failure is not None:

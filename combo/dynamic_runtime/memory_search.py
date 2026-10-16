@@ -46,8 +46,11 @@ class HybridMemorySearchIndex:
         with self._database.connection(query_only=True) as conn:
             conn.execute("begin")
             heads = conn.execute(
-                "select memory_id, revision, status from memory_heads where principal_id=? "
-                "and workspace_id=? and (scope='workspace' or (scope='session' and session_id=?)) order by memory_id",
+                "select head.memory_id, head.revision, head.status from memory_heads head "
+                "join workspaces workspace on workspace.workspace_id=head.workspace_id "
+                "where head.principal_id=? and head.workspace_id=? and workspace.status='active' "
+                "and ((head.scope='workspace' and workspace.mode='project') "
+                "or (head.scope='session' and head.session_id=?)) order by head.memory_id",
                 (principal_id, workspace_id, session_id),
             ).fetchall()
             active = self._active(conn)
@@ -99,7 +102,7 @@ class HybridMemorySearchIndex:
 
     def search(
         self, *, principal_id: str, workspace_id: str, session_id: str | None, query: str, limit: int,
-        min_relevance: float = 0.0, scope: MemoryScope | None = None,
+        min_relevance: float = 0.0, scope: MemoryScope | None = None, kind: str | None = None,
     ) -> tuple[RankedMemory, ...]:
         if limit < 1 or not lexical_tokens(query):
             return ()
@@ -128,9 +131,11 @@ class HybridMemorySearchIndex:
                 "from memory_search_documents document join memory_heads head "
                 "on head.memory_id=document.memory_id and head.revision=document.memory_revision "
                 "join memory_revisions revision on revision.memory_id=head.memory_id and revision.revision=head.revision "
+                "join workspaces workspace on workspace.workspace_id=head.workspace_id "
                 "where document.generation_id=? and head.status='active' and head.principal_id=? and head.workspace_id=? "
-                f"and {scope_condition}",
-                (generation_id, principal_id, workspace_id, *scope_parameters),
+                "and workspace.status='active' and (workspace.mode='project' or head.scope='session') "
+                f"and {scope_condition} and (? is null or revision.kind=?)",
+                (generation_id, principal_id, workspace_id, *scope_parameters, kind, kind),
             ).fetchall()
             allowed = {}
             vectors = {}

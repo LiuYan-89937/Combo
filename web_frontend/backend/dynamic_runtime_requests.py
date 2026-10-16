@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from combo.dynamic_runtime.mermaid_repair import MAX_MERMAID_ERROR_CHARS, MAX_MERMAID_SOURCE_CHARS
 from combo.runtime_protocol import ApprovalMode, DEFAULT_REASONING_INTENSITY, ExecutionPreference
+from combo.runtime_defaults import DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS
 
 
 class ConversationCreateRequest(BaseModel):
@@ -59,6 +60,8 @@ class RuntimePolicyWriteRequest(BaseModel):
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_recall_enabled: bool = True
     memory_agent_write_enabled: bool = True
+    memory_auto_extract_enabled: bool = True
+    memory_extraction_interval_turns: int = Field(default=DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS, ge=1)
     memory_max_injected_items: int = Field(default=8, ge=1, le=64)
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
     computer_use_enabled: bool | None = None

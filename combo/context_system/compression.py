@@ -19,6 +19,7 @@ from combo.context_system.schema import (
 from combo.context_system.token_counter import TokenCountResult
 from combo.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
 from combo.runtime_protocol.messages import has_complete_tool_call_history, represented_input_message_ids
+from combo.runtime_errors import runtime_failure_from_exception
 from combo.model_invocation.structured_output import (
     execute_structured_output_invocation,
     prepare_structured_output_invocation,
@@ -228,6 +229,7 @@ def maybe_compress_messages(
                 token_estimate_after=token_before,
                 token_count_method=count_before.method,
                 error=f"{type(exc).__name__}: {exc}",
+                failure=runtime_failure_from_exception(exc),
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
         )

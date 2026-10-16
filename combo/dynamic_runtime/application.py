@@ -56,6 +56,7 @@ from combo.dynamic_runtime.lifecycle_repositories import (
 from combo.dynamic_runtime.model_service import RuntimeModelResolver
 from combo.dynamic_runtime.memory_store import ScopedMemoryStore
 from combo.dynamic_runtime.memory_search import HybridMemorySearchIndex
+from combo.dynamic_runtime.memory_extraction import MemoryExtractionService
 from combo.dynamic_runtime.main_turn import (
     MainTurnCommandHandler,
 )
@@ -153,6 +154,8 @@ class DynamicRuntimeApplication:
         self.stores = stores
         self.service_set = service_set
         self.model_resolver = model_resolver
+        self.memory_extraction = MemoryExtractionService(database=database, memories=stores.memories,
+                                                        models=model_resolver)
         self.capability_resolver = capability_resolver
         self.runtime_service = runtime_service
         self.recovery_report = recovery_report

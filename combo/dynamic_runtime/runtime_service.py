@@ -67,6 +67,8 @@ from combo.runtime_protocol.messages import (
 )
 from combo.context_system.history import release_context_history
 from combo.runtime_protocol.interruption import RuntimeModelGenerationInterrupted, RuntimeToolExecutionCancelled
+from combo.runtime_protocol.errors import RuntimeFailure
+from combo.runtime_errors import runtime_failure_from_exception
 from combo.tooling.execution_context import (
     runtime_run_control_context,
     tool_output_session_context,
@@ -365,6 +367,11 @@ class DynamicRuntimeService:
                 state.execution.finish_status = "failed"
                 state.execution.last_error = delivery_error
                 state.execution.last_error_location = "delegation.delivery"
+                state.execution.failure = RuntimeFailure(
+                    code="runtime_delegation_delivery_failed", category="internal",
+                    user_message_key="runtime.error.runtime_delegation_delivery_failed",
+                    details={"message": delivery_error},
+                )
                 projection = project_runtime_messages(
                     instance=claimed_instance,
                     snapshot=snapshot,
@@ -426,15 +433,19 @@ class DynamicRuntimeService:
                 interrupt_payloads=tuple(interrupts),
             )
         except Exception as exc:
-            logger.exception(
-                "Dynamic runtime execution failed: runtime_instance_id=%s request_id=%s turn_id=%s",
+            failure = runtime_failure_from_exception(exc)
+            logger.log(
+                logging.INFO if failure.terminal_status == "cancelled" else logging.ERROR,
+                "Dynamic runtime execution ended: status=%s runtime_instance_id=%s request_id=%s turn_id=%s",
+                failure.terminal_status,
                 claimed_instance.runtime_instance_id,
                 claimed_instance.request.request_id,
                 claimed_instance.request.turn_id,
+                exc_info=failure.terminal_status == "failed",
             )
-            error = _exception_error(claimed_instance, exc)
+            error = _error_envelope(claimed_instance, failure)
             try:
-                self._execution_commits.fail_claimed(claimed_instance, error)
+                self._execution_commits.settle_exception(claimed_instance, error)
             except Exception as persistence_error:
                 raise RuntimeError("runtime execution failed and its terminal commit was rejected") from persistence_error
             raise
@@ -738,8 +749,17 @@ def _execution_status(
     if missing:
         state.execution.finished = True
         state.execution.finish_status = "failed"
-        state.execution.last_error = "Runtime graph ended with incomplete tool calls: " + ", ".join(missing)
-        state.execution.last_error_location = "runtime.finalize"
+        if state.execution.failure is None:
+            state.execution.last_error = "Runtime graph ended with incomplete tool calls: " + ", ".join(missing)
+            state.execution.last_error_location = "runtime.finalize"
+            state.execution.failure = RuntimeFailure(
+                code="runtime_tool_protocol_incomplete", category="internal",
+                user_message_key="runtime.error.runtime_tool_protocol_incomplete",
+                details={"message": state.execution.last_error},
+            )
+        state.execution.failure = state.execution.failure.model_copy(update={
+            "details": {**state.execution.failure.details, "incomplete_tool_call_ids": missing},
+        })
         return "failed"
     if state.execution.finish_status == "completed" and not state.execution.last_error:
         return "completed"
@@ -785,54 +805,37 @@ def _terminal_error(
 ) -> RuntimeErrorEnvelope | None:
     if status != "failed" and status != "cancelled":
         return None
-    cancelled = status == "cancelled"
-    return RuntimeErrorEnvelope(
-        code="runtime_cancelled" if cancelled else "runtime_execution_failed",
-        category="cancelled" if cancelled else "internal",
-        terminal_status=status,
-        retryable=False,
-        user_message_key="runtime.cancelled" if cancelled else "runtime.error.execution_failed",
-        request_id=instance.request.request_id,
-        runtime_instance_id=instance.runtime_instance_id,
-        operation=instance.request.policy_snapshot.model.operation,
-        details={
-            "error_location": str(state.execution.last_error_location or "runtime.finalize"),
-            "message": str(state.execution.last_error or "runtime execution failed"),
-        },
-    )
-
-
-def _exception_error(instance: RuntimeInstance, exc: Exception) -> RuntimeErrorEnvelope:
-    name = type(exc).__name__
-    lowered = name.lower()
-    if "timeout" in lowered:
-        category = "timeout"
-        code = "runtime_timeout"
-        retryable = True
-    elif "model" in lowered or "provider" in lowered:
-        category = "provider"
-        code = "runtime_model_unavailable"
-        retryable = True
-    elif isinstance(exc, (ValueError, LookupError)):
-        category = "validation"
-        code = "runtime_validation_failed"
-        retryable = False
+    if status == "cancelled":
+        failure = state.execution.failure
+        if failure is None or failure.terminal_status != "cancelled":
+            failure = RuntimeFailure(
+                code="runtime_cancelled", category="cancelled", terminal_status="cancelled",
+                user_message_key="runtime.cancelled",
+                details={"reason": instance.cancel_reason} if instance.cancel_reason else {},
+            )
     else:
-        category = "internal"
-        code = "runtime_internal_error"
-        retryable = False
+        failure = state.execution.failure or RuntimeFailure(
+            code="runtime_execution_failed", category="internal",
+            user_message_key="runtime.error.execution_failed",
+            details={"message": str(state.execution.last_error or "runtime execution failed")},
+        )
+    return _error_envelope(instance, failure, location=state.execution.last_error_location or "runtime.finalize")
+
+
+def _error_envelope(
+    instance: RuntimeInstance,
+    failure: RuntimeFailure,
+    *,
+    location: str | None = None,
+) -> RuntimeErrorEnvelope:
     return RuntimeErrorEnvelope(
-        code=code,
-        category=category,
-        terminal_status="failed",
-        retryable=retryable,
-        user_message_key=f"runtime.error.{code}",
+        **failure.model_dump(exclude={"details"}),
         request_id=instance.request.request_id,
         runtime_instance_id=instance.runtime_instance_id,
         operation=instance.request.policy_snapshot.model.operation,
         details={
-            "exception_type": name,
-            "message": str(exc).strip() or name,
+            **failure.details,
+            **({"error_location": location} if location else {}),
         },
     )
 

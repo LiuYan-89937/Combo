@@ -155,14 +155,14 @@ def _runtime_visible_tool_definition(
     branches = schema.get("oneOf")
     if not isinstance(branches, list):
         raise ValueError("memory tool input schema must declare oneOf actions")
-    visible = [branch for branch in branches if _schema_action(branch) != "write"]
+    visible = [branch for branch in branches if _schema_action(branch) in {"search", "list", "read"}]
     if len(visible) == len(branches):
         raise ValueError("memory tool input schema does not expose a write action")
     return definition.model_copy(
         update={
             "model_description": (
-                "Search the current workspace and session memories with action=search and query when "
-                "automatic recall is insufficient. Selected contents are supplied as supplementary memory data. "
+                "Search, list, or read the current workspace and session memories when automatic recall "
+                "is insufficient. Selected contents are supplied as supplementary memory data. "
                 "Memory writes are unavailable in this runtime."
             ),
             "input_schema": {**schema, "oneOf": visible},

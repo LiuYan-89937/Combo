@@ -10,6 +10,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
+from combo.model_image_inputs import message_image_parts
 from combo.models.message_layout import system_messages_first
 from combo.context_system.assembly import memory_frame_text
 from combo.context_system.memory_context import project_memory_tool_messages, read_memory_snapshot
@@ -24,7 +25,6 @@ from combo.runtime_kernel.state import RuntimeState
 from combo.runtime_kernel.tool_governance import tool_governance_prompt
 from combo.runtime_kernel.model_message_content import (
     copy_human_message_with_content,
-    message_image_parts,
     message_text,
     project_model_message_content,
 )

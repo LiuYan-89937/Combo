@@ -14,6 +14,7 @@ from combo.model_pool.schema import (
     ModelToolSelectionRecommendation,
 )
 from combo.model_pool.store import ModelPoolStore
+from combo.models.capabilities import resolve_provider_profile
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +173,7 @@ def _missing_capabilities(requirement: ModelSelectionRequirement, profile: Model
             missing.append(f"output:{item}")
     if requirement.tool_calling is True and not capabilities.tool_calling:
         missing.append("tool_calling")
-    if requirement.reasoning_required is True and not capabilities.reasoning_supported:
+    if requirement.reasoning_required is True and not resolve_provider_profile(profile.provider).capabilities.supports_reasoning():
         missing.append("reasoning")
     if requirement.kind == "image_generation":
         if "text" in requirement.input_modalities and "image" in requirement.output_modalities and not capabilities.text_to_image:
@@ -208,7 +209,7 @@ def _score_profile(requirement: ModelSelectionRequirement, profile: ModelPoolPro
     score = 0.5
     if requirement.tool_calling is True and profile.capabilities.tool_calling:
         score += 0.08
-    if requirement.reasoning_required is True and profile.capabilities.reasoning_supported:
+    if requirement.reasoning_required is True and resolve_provider_profile(profile.provider).capabilities.supports_reasoning():
         score += 0.08
     if requirement.min_context_window_tokens and profile.limits.max_input_tokens:
         ratio = min(profile.limits.max_input_tokens / requirement.min_context_window_tokens, 4.0)

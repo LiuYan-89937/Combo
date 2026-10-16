@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 
 from combo.runtime_protocol.errors import RuntimeErrorEnvelope
 from combo.runtime_i18n import RuntimeLocale, normalize_runtime_locale
+from combo.runtime_defaults import DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS
 
 
 ExecutionPreference = Literal["react", "plan_and_execute"]
@@ -94,6 +95,8 @@ class UserRuntimePolicy(ProtocolModel):
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_recall_enabled: bool = True
     memory_agent_write_enabled: bool = True
+    memory_auto_extract_enabled: bool = True
+    memory_extraction_interval_turns: int = Field(default=DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS, ge=1)
     memory_max_injected_items: int = Field(default=8, ge=1, le=64)
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
     computer_use_enabled: bool = False
@@ -179,6 +182,8 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_recall_enabled: bool = True
     memory_agent_write_enabled: bool
+    memory_auto_extract_enabled: bool = True
+    memory_extraction_interval_turns: int = Field(default=DEFAULT_MEMORY_EXTRACTION_INTERVAL_TURNS, ge=1)
     memory_max_injected_items: int = Field(ge=1, le=64)
     memory_max_injected_tokens: int = Field(ge=100, le=32000)
     computer_use_enabled: bool = False

@@ -7,10 +7,12 @@
       :autosize="{ minRows: 5, maxRows: 12 }"
       :placeholder="t('settings.agentInstructionsPlaceholder')"
       :aria-label="t('settings.agentInstructions')"
+      :disabled="loading || saving"
     />
     <p v-if="error" class="editor-error" role="alert">{{ error }}</p>
     <div class="editor-actions">
-      <n-button size="small" :loading="loading" @click="load">{{ t('common.refresh') }}</n-button>
+      <n-button size="small" :loading="loading" :disabled="saving || loadingLegacy" @click="load">{{ t('common.refresh') }}</n-button>
+      <n-button size="small" :loading="loadingLegacy" :disabled="loading || saving" @click="importLegacyDraft">{{ t('settings.agentInstructionsLegacyDraft') }}</n-button>
       <n-button size="small" type="primary" :loading="saving" :disabled="loading || digest === null || content === savedContent" @click="save">
         {{ t('common.save') }}
       </n-button>
@@ -44,11 +46,13 @@ import { memoryApi, type LegacyUserMemoryView } from '@/api/memory'
 import { useI18n } from '@/composables/useI18n'
 
 const { t } = useI18n()
+const props = defineProps<{ workspaceId: string }>()
 const content = ref('')
 const savedContent = ref('')
 const digest = ref<string | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const loadingLegacy = ref(false)
 const error = ref('')
 const reviewVisible = ref(false)
 const reviewLoading = ref(false)
@@ -58,7 +62,7 @@ const legacyMemories = ref<LegacyUserMemoryView[]>([])
 async function load() {
   loading.value = true
   try {
-    const current = await agentInstructionsApi.read()
+    const current = await agentInstructionsApi.read(props.workspaceId)
     content.value = current.content
     savedContent.value = current.content
     digest.value = current.digest
@@ -74,7 +78,7 @@ async function save() {
   if (digest.value === null || saving.value) return
   saving.value = true
   try {
-    const updated = await agentInstructionsApi.replace(content.value, digest.value)
+    const updated = await agentInstructionsApi.replace(props.workspaceId, content.value, digest.value)
     digest.value = updated.digest
     savedContent.value = updated.content
     error.value = ''
@@ -82,6 +86,18 @@ async function save() {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
     saving.value = false
+  }
+}
+
+async function importLegacyDraft() {
+  loadingLegacy.value = true
+  try {
+    const draft = await agentInstructionsApi.legacyDraft()
+    if (draft.content.trim()) addToDraft(draft.content)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loadingLegacy.value = false
   }
 }
 
